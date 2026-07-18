@@ -18,23 +18,6 @@ deterministic compiler resolves actions → keep-ranges, validating and clamping
 everything against the real transcript. The manual UI edits produce the *same*
 range operations. One engine, two input methods.
 
-## Screenshots
-
-The editor — manuscript-style transcript with the active word highlighted, the
-timeline showing kept (solid) vs cut (hatched) regions, caption-overlay preview,
-one-click actions, and the AI command bar:
-
-![aicut editor](docs/editor.png)
-
-The same edit previewed as vertical **9:16** with burned-caption preview (no
-re-render — it's a CSS crop of the live player):
-
-![aicut 9:16 preview](docs/editor-vertical.png)
-
-The library / import screen:
-
-![aicut library](docs/library.png)
-
 ```
 ┌──────────────────────────── frontend (React) ───────────────────────────┐
 │  player (skip-preview, caption overlay)  │  interactive transcript      │
@@ -133,11 +116,9 @@ Built milestone by milestone (M0–M6); see git history:
 - **M3** manual editing — select/delete/restore, timeline, undo/redo, edit log
 - **M4** one-click deterministic actions + LLM command bar (Ollama)
 - **M5** captions (ASS export + preview) and 9:16 (export + preview), export dialog
-- **M6** design/UX polish, keyboard map, empty/error states, docs, screenshots
+- **M6** design/UX polish, keyboard map, empty/error states, docs
 
-The screenshots above are real captures of the running app (see
-`scripts/shot.mjs`). Regenerate them any time by importing a video and pointing a
-browser at `/?open=<projectId>`.
+A demo video will be added here once the project is complete.
 
 ## License
 
