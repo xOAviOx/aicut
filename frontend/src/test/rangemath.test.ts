@@ -32,7 +32,8 @@ describe("remapTime / inverseRemap", () => {
     expect(remapTime(100, keep)).toBe(20); // after all keeps -> total
   });
   it("inverse is a left inverse on kept times", () => {
-    for (const t of [0, 3, 9.5, 20, 25, 29.9]) {
+    // interior points only — times exactly on a cut/keep boundary are ambiguous
+    for (const t of [0, 3, 9.5, 20.1, 25, 29.9]) {
       expect(inverseRemap(remapTime(t, keep), keep)).toBeCloseTo(t, 6);
     }
   });

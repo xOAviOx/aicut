@@ -18,6 +18,31 @@
   ::selection {
     background: rgba(217, 164, 65, 0.28);
   }
+
+  /* Visible keyboard focus — only for keyboard users, not mouse clicks. */
+  :focus-visible {
+    outline: 2px solid theme("colors.accent.DEFAULT");
+    outline-offset: 2px;
+    border-radius: 3px;
+  }
+  button:focus:not(:focus-visible),
+  a:focus:not(:focus-visible) {
+    outline: none;
+  }
+
+  /* Custom scrollbars that fit the charcoal chrome. */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: theme("colors.ink.600");
+    border-radius: 6px;
+    border: 2px solid theme("colors.ink.900");
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: theme("colors.ink.500");
+  }
 }
 
 @layer components {

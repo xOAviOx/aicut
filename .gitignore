@@ -31,6 +31,6 @@ Thumbs.db
 .vscode/
 *.swp
 
-# test artifacts
-tests/fixtures/*.mp4
-tests/fixtures/*.wav
+# test artifacts (fixtures are generated from tests/make_fixture.py; commit the
+# script, not the binaries)
+tests/fixtures/
