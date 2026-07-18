@@ -1,0 +1,57 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    margin: 0;
+    font-family: theme("fontFamily.ui");
+  }
+  ::selection {
+    background: rgba(217, 164, 65, 0.28);
+  }
+}
+
+@layer components {
+  /* Tabular monospace for all timecodes. */
+  .tc {
+    font-family: theme("fontFamily.mono");
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em;
+  }
+
+  /* A cut word rendered as an elegant strikethrough redaction. */
+  .word-cut {
+    color: theme("colors.redact.dim");
+    text-decoration: line-through;
+    text-decoration-color: theme("colors.redact.DEFAULT");
+    text-decoration-thickness: 1.5px;
+    opacity: 0.72;
+  }
+
+  .word-active {
+    background: rgba(217, 164, 65, 0.22);
+    border-radius: 3px;
+    box-shadow: 0 0 0 1px rgba(217, 164, 65, 0.35);
+  }
+
+  .word-selected {
+    background: rgba(217, 164, 65, 0.16);
+    border-radius: 2px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}
