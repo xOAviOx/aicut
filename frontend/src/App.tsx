@@ -1,9 +1,17 @@
+import { useEffect } from "react";
 import { useStore } from "./store";
 import Library from "./components/Library";
 import Editor from "./components/Editor";
 
 export default function App() {
   const view = useStore((s) => s.view);
+  const openProject = useStore((s) => s.openProject);
+
+  // Deep-link: /?open=<projectId> jumps straight into the editor.
+  useEffect(() => {
+    const id = new URLSearchParams(window.location.search).get("open");
+    if (id) openProject(id);
+  }, [openProject]);
   return (
     <div className="flex h-full flex-col bg-ink-900">
       {view === "library" ? (

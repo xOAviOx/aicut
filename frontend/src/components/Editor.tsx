@@ -153,6 +153,13 @@ export default function Editor() {
           <PreviewToggle />
           <HeaderControls onToggleLog={() => setShowLog((v) => !v)} />
           <button
+            onClick={() => setShowHelp(true)}
+            title="Keyboard shortcuts (?)"
+            className="rounded-md border border-ink-600 px-2 py-1 text-xs text-parchment-300 transition hover:border-accent"
+          >
+            ?
+          </button>
+          <button
             onClick={() => setShowExport(true)}
             className="rounded-md bg-accent px-3 py-1 text-xs font-medium text-ink-900 transition hover:bg-accent-glow"
           >
@@ -160,6 +167,7 @@ export default function Editor() {
           </button>
         </div>
       </header>
+      <ErrorBanner />
 
       <div className="flex flex-1 overflow-hidden">
         <div className="grid flex-1 grid-cols-1 overflow-hidden lg:grid-cols-[minmax(360px,42%)_1fr]">
@@ -179,6 +187,7 @@ export default function Editor() {
 
       <TranscribingOverlay />
       {showExport && <ExportDialog onClose={() => setShowExport(false)} />}
+      {showHelp && <Shortcuts onClose={() => setShowHelp(false)} />}
     </div>
   );
 }

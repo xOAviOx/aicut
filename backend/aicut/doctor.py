@@ -73,11 +73,13 @@ def check_nvenc() -> Check:
         return Check("NVENC encoder", WARN, "ffmpeg missing; can't check")
     rc, out = _run(["ffmpeg", "-hide_banner", "-encoders"])
     if "h264_nvenc" in out:
-        return Check("NVENC (h264_nvenc)", OK, "hardware H.264 encode available")
+        return Check(
+            "NVENC (h264_nvenc)", OK, "encoder listed (export auto-falls back to libx264 if it fails)"
+        )
     return Check(
         "NVENC (h264_nvenc)",
         WARN,
-        "not available — will fall back to libx264 (CPU)",
+        "not available — will use libx264 (CPU)",
     )
 
 
