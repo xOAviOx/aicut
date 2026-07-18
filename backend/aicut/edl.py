@@ -290,3 +290,34 @@ def _fmt(seconds: float) -> str:
     if h:
         return f"{h}:{m:02d}:{s:02d}"
     return f"{m}:{s:02d}"
+
+
+def _count_words(refs) -> int:
+    return sum(abs(r.word_index_end - r.word_index_start) + 1 for r in refs)
+
+
+def label_for_action(action: Action) -> str:
+    """A human, revision-log-worthy label for a single manual/AI action."""
+    if isinstance(action, CutWords):
+        n = _count_words(action.word_refs)
+        return f"Manual: deleted {n} word{'s' if n != 1 else ''}"
+    if isinstance(action, RestoreWords):
+        n = _count_words(action.word_refs)
+        return f"Manual: restored {n} word{'s' if n != 1 else ''}"
+    if isinstance(action, CutRanges):
+        return f"Manual: cut {len(action.ranges)} range{'s' if len(action.ranges) != 1 else ''}"
+    if isinstance(action, KeepRanges):
+        return "Manual: kept selection"
+    if isinstance(action, RemoveSilences):
+        return "Removed silences"
+    if isinstance(action, RemoveFillers):
+        return "Removed filler words"
+    if isinstance(action, Trim):
+        return f"Trimmed {action.mode} anchor"
+    if isinstance(action, FilterTopic):
+        return f"{'Kept' if action.mode == 'keep' else 'Removed'} topic: {action.query!r}"
+    if isinstance(action, SetCaptions):
+        return f"Captions {'on' if action.enabled else 'off'}"
+    if isinstance(action, SetAspect):
+        return f"Aspect → {action.aspect}"
+    return "Edit"

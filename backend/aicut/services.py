@@ -44,17 +44,18 @@ class TranscriptionService:
         if project is None:
             return
 
-        # thumbnail (best-effort, non-fatal)
+        # Atomically claim the job; bail if a transcript was already attached.
+        if not self.store.begin_transcription(pid):
+            return
+
+        # thumbnail (best-effort, non-fatal, field-scoped write)
         try:
             dest = self.store.settings.project_dir(pid) / "thumb.jpg"
             if extract_thumbnail(project.source_path, dest) is not None:
-                project.thumbnail = f"/media/{pid}/thumb"
+                self.store.set_thumbnail(pid, f"/media/{pid}/thumb")
         except Exception:
             pass
 
-        project.transcript_status = "running"
-        project.transcript_progress = 0.0
-        self.store.save(project)
         self.hub.publish(pid, {"type": "transcription", "status": "running", "progress": 0.0})
 
         last_emit = 0.0
@@ -97,11 +98,96 @@ class TranscriptionService:
 
     def _fail(self, pid: str, message: str) -> None:
         project = self.store.get(pid)
-        if project is not None:
-            project.transcript_status = "error"
-            project.transcript_error = message
-            self.store.save(project)
+        if project is None:
+            return
+        # Don't clobber a transcript that was attached out-of-band (no-ML path)
+        # while this job was failing to load the model.
+        if project.transcript_status == "ready":
+            return
+        project.transcript_status = "error"
+        project.transcript_error = message
+        self.store.save(project)
         self.hub.publish(pid, {"type": "transcription", "status": "error", "error": message})
+
+
+class ExportService:
+    """Background ffmpeg export jobs with SSE progress."""
+
+    def __init__(self, store: ProjectStore, hub: EventHub) -> None:
+        self.store = store
+        self.hub = hub
+
+    def exports_dir(self, pid: str) -> Path:
+        d = self.store.settings.project_dir(pid) / "exports"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def run(self, pid: str, preset: dict, job_id: str) -> None:
+        import time
+
+        from .ffmpeg_export import ExportPreset, export
+
+        project = self.store.get(pid)
+        transcript = self.store.get_transcript(pid)
+        if project is None or transcript is None:
+            self.hub.publish(
+                pid, {"type": "export", "job_id": job_id, "status": "error", "error": "not ready"}
+            )
+            return
+
+        head = self.store.head_edl(project, transcript)
+        out_name = f"{_safe_name(project.name)}-{job_id[:6]}.mp4"
+        out_path = self.exports_dir(pid) / out_name
+
+        self.hub.publish(pid, {"type": "export", "job_id": job_id, "status": "running", "progress": 0.0})
+        last = 0.0
+
+        def cb(frac: float) -> None:
+            nonlocal last
+            now = time.time()
+            if now - last >= 0.4 or frac >= 0.999:
+                last = now
+                self.hub.publish(
+                    pid,
+                    {"type": "export", "job_id": job_id, "status": "running", "progress": round(frac, 4)},
+                )
+
+        try:
+            export(
+                head,
+                transcript,
+                project.source_path,
+                out_path,
+                ExportPreset(
+                    aspect=preset.get("aspect"),
+                    captions=preset.get("captions"),
+                    granularity=preset.get("granularity"),
+                    quality=preset.get("quality", "balanced"),
+                ),
+                cb,
+            )
+            self.hub.publish(
+                pid,
+                {
+                    "type": "export",
+                    "job_id": job_id,
+                    "status": "done",
+                    "progress": 1.0,
+                    "name": out_name,
+                    "url": f"/media/{pid}/exports/{out_name}",
+                    "size": out_path.stat().st_size if out_path.exists() else 0,
+                },
+            )
+        except Exception as e:  # noqa: BLE001
+            traceback.print_exc()
+            self.hub.publish(
+                pid, {"type": "export", "job_id": job_id, "status": "error", "error": str(e)[:500]}
+            )
+
+
+def _safe_name(name: str) -> str:
+    keep = "".join(c if c.isalnum() or c in "-_" else "-" for c in name).strip("-")
+    return keep or "export"
 
 
 def import_media_path(raw: str) -> tuple[Path, str | None]:

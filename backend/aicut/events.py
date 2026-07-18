@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from collections import defaultdict
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
 
@@ -51,3 +53,36 @@ def sse_format(event: dict[str, Any]) -> str:
     etype = event.get("type", "message")
     payload = json.dumps(event, ensure_ascii=False)
     return f"event: {etype}\ndata: {payload}\n\n"
+
+
+async def event_stream(
+    hub: EventHub,
+    pid: str,
+    snapshot: dict[str, Any],
+    is_disconnected: Callable[[], Awaitable[bool]],
+    *,
+    poll: float = 0.5,
+    keepalive: float = 15.0,
+) -> AsyncIterator[str]:
+    """Async generator backing the SSE endpoint (extracted so it's unit-testable).
+
+    Subscribes *before* emitting the snapshot so no event can slip through the
+    gap. Polls on a short interval so client disconnects are noticed promptly.
+    """
+    q = hub.subscribe(pid)
+    try:
+        yield sse_format(snapshot)
+        last = time.monotonic()
+        while True:
+            if await is_disconnected():
+                break
+            try:
+                event = await asyncio.wait_for(q.get(), timeout=poll)
+                yield sse_format(event)
+            except TimeoutError:
+                now = time.monotonic()
+                if now - last >= keepalive:
+                    last = now
+                    yield ": keepalive\n\n"
+    finally:
+        hub.unsubscribe(pid, q)

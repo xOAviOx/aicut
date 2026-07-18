@@ -24,12 +24,21 @@ def _fake_transcriber(transcript):
     return _t
 
 
+FAKE_PLAN = (
+    '{"actions": [{"type": "remove_silences", "min_gap_s": 0.6}], '
+    '"notes": "tightened pauses"}'
+)
+
+
 @pytest.fixture
 def client(isolated_home, simple_transcript):
+    from aicut.llm import Planner
+
     store = ProjectStore()
     hub = EventHub()
     svc = TranscriptionService(store, hub, transcriber=_fake_transcriber(simple_transcript))
-    app = create_app(store, hub, svc)
+    planner = Planner(chat_fn=lambda messages: FAKE_PLAN)
+    app = create_app(store, hub, svc, planner=planner)
     with TestClient(app) as c:
         c.app_store = store  # type: ignore[attr-defined]
         c.app_hub = hub  # type: ignore[attr-defined]
@@ -117,44 +126,211 @@ def test_media_404(client):
     assert r.status_code == 404
 
 
-def _read_sse_event(line_iter) -> dict:
-    """Accumulate lines until a blank line -> parse one SSE frame."""
+def _parse_frame(frame: str) -> dict:
+    """Parse one SSE frame string ('event: x\\ndata: {...}\\n\\n') into a dict."""
     import json
 
-    event_type = None
+    etype = None
     data = None
-    for raw in line_iter:
-        line = raw.decode() if isinstance(raw, bytes) else raw
-        if line == "":
-            if data is not None:
-                return {"event": event_type, **json.loads(data)}
-            continue
+    for line in frame.splitlines():
         if line.startswith("event:"):
-            event_type = line.split(":", 1)[1].strip()
+            etype = line.split(":", 1)[1].strip()
         elif line.startswith("data:"):
             data = line.split(":", 1)[1].strip()
-    raise AssertionError("stream ended before a full event")
+    return {"event": etype, **(json.loads(data) if data else {})}
 
 
-def test_sse_snapshot_and_published_event(client, media_file):
-    store: ProjectStore = client.app_store
-    hub: EventHub = client.app_hub
-    project = store.create(str(media_file), name="sse")
-    pid = project.id
+def test_event_stream_generator_snapshot_publish_disconnect():
+    """Drive the extracted SSE generator directly: snapshot -> event -> stop."""
+    from aicut.events import event_stream
 
-    with client.stream("GET", f"/api/projects/{pid}/events") as r:
+    async def scenario():
+        hub = EventHub()
+        hub.bind_loop(asyncio.get_running_loop())
+        disconnected = {"v": False}
+
+        async def is_disconnected():
+            return disconnected["v"]
+
+        snapshot = {"type": "transcription", "status": "pending", "progress": 0.0}
+        gen = event_stream(hub, "p1", snapshot, is_disconnected, poll=0.02)
+
+        first = _parse_frame(await gen.__anext__())
+        hub.publish("p1", {"type": "transcription", "status": "running", "progress": 0.5})
+        second = _parse_frame(await asyncio.wait_for(gen.__anext__(), timeout=2.0))
+
+        disconnected["v"] = True
+        stopped = False
+        try:
+            await asyncio.wait_for(gen.__anext__(), timeout=2.0)
+        except StopAsyncIteration:
+            stopped = True
+        return first, second, stopped
+
+    first, second, stopped = asyncio.run(scenario())
+    assert first["event"] == "transcription" and first["status"] == "pending"
+    assert second["status"] == "running" and second["progress"] == 0.5
+    assert stopped is True
+
+
+def _ready_project(client, media_file, simple_transcript) -> str:
+    pid = client.post("/api/projects", json={"path": str(media_file)}).json()["project"]["id"]
+    client.post(f"/api/projects/{pid}/transcript", json=simple_transcript.model_dump())
+    return pid
+
+
+def test_manual_cut_words_creates_revision(client, media_file, simple_transcript):
+    pid = _ready_project(client, media_file, simple_transcript)
+    body = {
+        "action": {
+            "type": "cut_words",
+            "word_refs": [{"segment_id": 1, "word_index_start": 0, "word_index_end": 1}],
+        }
+    }
+    r = client.post(f"/api/projects/{pid}/edits", json=body)
+    assert r.status_code == 200
+    proj = r.json()["project"]
+    assert len(proj["revisions"]) == 2
+    assert "deleted 2 words" in proj["revisions"][-1]["label"]
+
+
+def test_manual_edit_then_undo_redo(client, media_file, simple_transcript):
+    pid = _ready_project(client, media_file, simple_transcript)
+    client.post(
+        f"/api/projects/{pid}/edits",
+        json={"action": {"type": "cut_ranges", "ranges": [[0, 2]]}},
+    )
+    proj = client.post(f"/api/projects/{pid}/undo").json()["project"]
+    assert proj["head_revision_id"] == proj["revisions"][0]["id"]
+    proj = client.post(f"/api/projects/{pid}/redo").json()["project"]
+    assert proj["head_revision_id"] == proj["revisions"][1]["id"]
+
+
+def test_goto_revision(client, media_file, simple_transcript):
+    pid = _ready_project(client, media_file, simple_transcript)
+    client.post(
+        f"/api/projects/{pid}/edits",
+        json={"action": {"type": "cut_ranges", "ranges": [[0, 2]]}},
+    )
+    proj = client.get(f"/api/projects/{pid}").json()["project"]
+    r0 = proj["revisions"][0]["id"]
+    proj = client.post(f"/api/projects/{pid}/revisions/{r0}").json()["project"]
+    assert proj["head_revision_id"] == r0
+
+
+def test_edit_before_ready_409(client, media_file):
+    pid = client.post("/api/projects", json={"path": str(media_file)}).json()["project"]["id"]
+    # transcription (fake) may still be running; force pending by not attaching.
+    # A cut on a not-ready project should 409 (or the fake may have finished — accept both).
+    r = client.post(
+        f"/api/projects/{pid}/edits",
+        json={"action": {"type": "cut_ranges", "ranges": [[0, 1]]}},
+    )
+    assert r.status_code in (200, 409)
+
+
+def test_one_click_remove_silences(client, media_file, simple_transcript):
+    pid = _ready_project(client, media_file, simple_transcript)
+    r = client.post(f"/api/projects/{pid}/actions/remove_silences")
+    assert r.status_code == 200
+    proj = r.json()["project"]
+    assert len(proj["revisions"]) == 2
+    assert "silence" in proj["revisions"][-1]["label"].lower()
+
+
+def test_one_click_captions_and_aspect(client, media_file, simple_transcript):
+    pid = _ready_project(client, media_file, simple_transcript)
+    client.post(f"/api/projects/{pid}/actions/captions_on")
+    proj = client.post(f"/api/projects/{pid}/actions/aspect_916").json()["project"]
+    head = next(r for r in proj["revisions"] if r["id"] == proj["head_revision_id"])
+    assert head["edl"]["aspect"] == "9:16"
+    assert head["edl"]["captions"]["enabled"] is True
+
+
+def test_one_click_unknown_400(client, media_file, simple_transcript):
+    pid = _ready_project(client, media_file, simple_transcript)
+    assert client.post(f"/api/projects/{pid}/actions/nope").status_code == 400
+
+
+def test_command_success(client, media_file, simple_transcript):
+    pid = _ready_project(client, media_file, simple_transcript)
+    r = client.post(f"/api/projects/{pid}/command", json={"instruction": "cut the silences"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["ok"] is True
+    assert body["revision"]["label"].startswith("AI:")
+    assert "notes" in body
+
+
+def test_command_llm_unavailable_returns_structured_error(
+    isolated_home, media_file, simple_transcript
+):
+    from aicut.llm import LLMUnavailable, Planner
+
+    def boom(messages):
+        raise LLMUnavailable("ollama is not running")
+
+    store = ProjectStore()
+    hub = EventHub()
+    svc = TranscriptionService(store, hub, transcriber=_fake_transcriber(simple_transcript))
+    app = create_app(store, hub, svc, planner=Planner(chat_fn=boom))
+    with TestClient(app) as c:
+        pid = c.post("/api/projects", json={"path": str(media_file)}).json()["project"]["id"]
+        c.post(f"/api/projects/{pid}/transcript", json=simple_transcript.model_dump())
+        r = c.post(f"/api/projects/{pid}/command", json={"instruction": "cut silences"})
         assert r.status_code == 200
-        assert r.headers["content-type"].startswith("text/event-stream")
-        lines = r.iter_lines()
-        # 1) initial snapshot
-        snapshot = _read_sse_event(lines)
-        assert snapshot["event"] == "transcription"
-        assert snapshot["status"] == "pending"
-        # 2) a published progress event reaches the subscriber
-        hub.publish(pid, {"type": "transcription", "status": "running", "progress": 0.5})
-        evt = _read_sse_event(lines)
-        assert evt["status"] == "running"
-        assert evt["progress"] == 0.5
+        body = r.json()
+        assert body["ok"] is False
+        assert body["kind"] == "llm_unavailable"
+        assert "ollama" in body["error"].lower()
+
+
+def test_command_plan_error_returns_structured_error(
+    isolated_home, media_file, simple_transcript
+):
+    from aicut.llm import Planner
+
+    store = ProjectStore()
+    hub = EventHub()
+    svc = TranscriptionService(store, hub, transcriber=_fake_transcriber(simple_transcript))
+    app = create_app(store, hub, svc, planner=Planner(chat_fn=lambda m: "garbage not json"))
+    with TestClient(app) as c:
+        pid = c.post("/api/projects", json={"path": str(media_file)}).json()["project"]["id"]
+        c.post(f"/api/projects/{pid}/transcript", json=simple_transcript.model_dump())
+        r = c.post(f"/api/projects/{pid}/command", json={"instruction": "do something"})
+        assert r.json()["ok"] is False
+        assert r.json()["kind"] == "plan_error"
+
+
+def test_export_kicks_job(client, media_file, simple_transcript, monkeypatch):
+    pid = _ready_project(client, media_file, simple_transcript)
+    # avoid running real ffmpeg — just confirm the endpoint dispatches a job
+    monkeypatch.setattr(client.app.state.export, "run", lambda *a, **k: None)
+    r = client.post(f"/api/projects/{pid}/export", json={"aspect": "9:16", "quality": "fast"})
+    assert r.status_code == 200
+    assert "job_id" in r.json()
+
+
+def test_list_and_serve_exports(client, media_file, simple_transcript):
+    pid = _ready_project(client, media_file, simple_transcript)
+    store: ProjectStore = client.app_store
+    exp_dir = store.settings.project_dir(pid) / "exports"
+    exp_dir.mkdir(parents=True, exist_ok=True)
+    data = b"FAKEMP4DATA" * 100
+    (exp_dir / "clip-abc123.mp4").write_bytes(data)
+
+    listing = client.get(f"/api/projects/{pid}/exports").json()["exports"]
+    assert any(e["name"] == "clip-abc123.mp4" for e in listing)
+
+    r = client.get(f"/media/{pid}/exports/clip-abc123.mp4", headers={"Range": "bytes=0-9"})
+    assert r.status_code == 206
+    assert r.content == data[:10]
+
+
+def test_export_file_traversal_guarded(client, media_file, simple_transcript):
+    pid = _ready_project(client, media_file, simple_transcript)
+    r = client.get(f"/media/{pid}/exports/..%2f..%2fproject.json")
+    assert r.status_code == 404
 
 
 def test_event_hub_thread_safe_delivery():

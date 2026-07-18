@@ -105,6 +105,26 @@ class ProjectStore:
             return None
         return Transcript.model_validate_json(f.read_text(encoding="utf-8"))
 
+    def begin_transcription(self, pid: str) -> bool:
+        """Atomically move to 'running'. Returns False if already ready (skip)."""
+        with self._lock(pid):
+            project = self.get(pid)
+            if project is None or project.transcript_status == "ready":
+                return False
+            project.transcript_status = "running"
+            project.transcript_progress = 0.0
+            self.save(project)
+            return True
+
+    def set_thumbnail(self, pid: str, url: str) -> None:
+        """Update just the thumbnail field, preserving any concurrent changes."""
+        with self._lock(pid):
+            project = self.get(pid)
+            if project is None:
+                return
+            project.thumbnail = url
+            self.save(project)
+
     def finalize_transcript(self, pid: str, transcript: Transcript) -> Project:
         """Persist a finished transcript and seed the initial ('Original') revision."""
         with self._lock(pid):
