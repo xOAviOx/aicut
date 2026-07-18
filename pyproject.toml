@@ -1,0 +1,60 @@
+[project]
+name = "aicut"
+version = "0.1.0"
+description = "aicut — an AI-controlled video editor (transcript-driven, non-destructive preview, ffmpeg export)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.7",
+    "python-multipart>=0.0.9",
+    "httpx>=0.27",
+    "numpy>=1.26",
+]
+
+# Heavy ML dependencies are optional so the engine, API, tests, and `doctor`
+# all run without gigabytes of torch/CUDA wheels. Install with:
+#   uv sync --extra ml
+[project.optional-dependencies]
+ml = [
+    "faster-whisper>=1.0.3",
+    "sentence-transformers>=3.0",
+]
+dev = [
+    "pytest>=8.2",
+    "ruff>=0.5",
+    "httpx>=0.27",
+]
+
+[project.scripts]
+aicut = "aicut.__main__:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["backend/aicut"]
+
+[dependency-groups]
+# installed by default with `uv sync`; keeps dev tooling always available
+dev = [
+    "pytest>=8.2",
+    "ruff>=0.5",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["backend"]
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["backend", "tests", "scripts"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "W"]
+ignore = ["B008", "E501"]
