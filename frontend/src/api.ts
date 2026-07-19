@@ -1,6 +1,6 @@
 // REST + SSE client. Same-origin in dev via the Vite proxy (/api, /media).
 
-import type { CommandResult, Project, Transcript } from "./types";
+import type { CommandResult, Project, Transcript, Workspace } from "./types";
 
 async function jsonOrThrow<T>(res: Response): Promise<T> {
   if (!res.ok) {
@@ -19,6 +19,11 @@ async function jsonOrThrow<T>(res: Response): Promise<T> {
 export interface ProjectPayload {
   project: Project;
   transcript: Transcript | null;
+}
+
+export interface WorkspacePayload {
+  workspace: Workspace;
+  clips: ProjectPayload[];
 }
 
 export const api = {
@@ -102,6 +107,63 @@ export const api = {
   async listExports(id: string): Promise<{ exports: { name: string; url: string; size: number }[] }> {
     const r = await fetch(`/api/projects/${id}/exports`);
     return jsonOrThrow(r);
+  },
+
+  async waveform(id: string): Promise<{ peaks: number[]; duration: number }> {
+    const r = await fetch(`/media/${id}/waveform`);
+    return jsonOrThrow<{ peaks: number[]; duration: number }>(r);
+  },
+
+  // -- workspaces -----------------------------------------------------------
+  async listWorkspaces(): Promise<{ workspace: Workspace; clips: Project[] }[]> {
+    const r = await fetch("/api/workspaces");
+    return (await jsonOrThrow<{ workspaces: { workspace: Workspace; clips: Project[] }[] }>(r))
+      .workspaces;
+  },
+
+  async createWorkspace(body: {
+    name?: string;
+    clip_ids?: string[];
+    paths?: string[];
+  }): Promise<WorkspacePayload> {
+    const r = await fetch("/api/workspaces", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    return jsonOrThrow<WorkspacePayload>(r);
+  },
+
+  async getWorkspace(id: string): Promise<WorkspacePayload> {
+    return jsonOrThrow<WorkspacePayload>(await fetch(`/api/workspaces/${id}`));
+  },
+
+  async addClip(id: string, body: { project_id?: string; path?: string }): Promise<WorkspacePayload> {
+    const r = await fetch(`/api/workspaces/${id}/clips`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    return jsonOrThrow<WorkspacePayload>(r);
+  },
+
+  async removeClip(id: string, clipId: string): Promise<WorkspacePayload> {
+    return jsonOrThrow<WorkspacePayload>(
+      await fetch(`/api/workspaces/${id}/clips/${clipId}`, { method: "DELETE" }),
+    );
+  },
+
+  async reorderWorkspace(id: string, clipIds: string[]): Promise<WorkspacePayload> {
+    const r = await fetch(`/api/workspaces/${id}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ clip_ids: clipIds }),
+    });
+    return jsonOrThrow<WorkspacePayload>(r);
+  },
+
+  async deleteWorkspace(id: string): Promise<void> {
+    await fetch(`/api/workspaces/${id}`, { method: "DELETE" });
   },
 
   // SSE subscription; returns an unsubscribe fn.

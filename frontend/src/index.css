@@ -72,6 +72,20 @@
     background: rgba(217, 164, 65, 0.16);
     border-radius: 2px;
   }
+
+  /* Low-confidence transcription shading — only visible when the reader turns
+     it on (the .show-confidence class is toggled on the transcript container),
+     so it costs nothing in the default reading view. A dotted underline in a
+     warm tone flags words whisper was unsure about (likely mishearings). */
+  .show-confidence .word-lowconf {
+    text-decoration: underline dotted rgba(196, 92, 74, 0.9);
+    text-underline-offset: 3px;
+    text-decoration-thickness: 1.5px;
+  }
+  .show-confidence .word-midconf {
+    text-decoration: underline dotted rgba(196, 150, 74, 0.7);
+    text-underline-offset: 3px;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

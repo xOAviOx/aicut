@@ -124,8 +124,10 @@ class ExportService:
 
     def run(self, pid: str, preset: dict, job_id: str) -> None:
         import time
+        from pathlib import Path as _Path
 
-        from .ffmpeg_export import ExportPreset, export
+        from .ffmpeg_export import ExportPreset, MergeClip, export, export_merge
+        from .media import has_audio, video_dimensions
 
         project = self.store.get(pid)
         transcript = self.store.get_transcript(pid)
@@ -138,6 +140,34 @@ class ExportService:
         head = self.store.head_edl(project, transcript)
         out_name = f"{_safe_name(project.name)}-{job_id[:6]}.mp4"
         out_path = self.exports_dir(pid) / out_name
+
+        # Resolve any clips to stitch after this one (append/merge).
+        append_ids = preset.get("append_project_ids") or []
+        merge_clips: list[MergeClip] = []
+        if append_ids:
+            def _clip(proj, tr) -> MergeClip:
+                edl = self.store.head_edl(proj, tr)
+                return MergeClip(
+                    src=_Path(proj.source_path),
+                    keep=edl.keep,
+                    transcript=tr,
+                    src_dims=video_dimensions(proj.source_path),
+                    has_audio=has_audio(proj.source_path),
+                )
+
+            merge_clips.append(_clip(project, transcript))
+            for aid in append_ids:
+                ap = self.store.get(aid)
+                at = self.store.get_transcript(aid)
+                if ap is not None and at is not None and ap.transcript_status == "ready":
+                    merge_clips.append(_clip(ap, at))
+
+        export_preset = ExportPreset(
+            aspect=preset.get("aspect"),
+            captions=preset.get("captions"),
+            granularity=preset.get("granularity"),
+            quality=preset.get("quality", "balanced"),
+        )
 
         self.hub.publish(pid, {"type": "export", "job_id": job_id, "status": "running", "progress": 0.0})
         last = 0.0
@@ -153,19 +183,10 @@ class ExportService:
                 )
 
         try:
-            export(
-                head,
-                transcript,
-                project.source_path,
-                out_path,
-                ExportPreset(
-                    aspect=preset.get("aspect"),
-                    captions=preset.get("captions"),
-                    granularity=preset.get("granularity"),
-                    quality=preset.get("quality", "balanced"),
-                ),
-                cb,
-            )
+            if len(merge_clips) > 1:
+                export_merge(merge_clips, out_path, export_preset, cb)
+            else:
+                export(head, transcript, project.source_path, out_path, export_preset, cb)
             self.hub.publish(
                 pid,
                 {

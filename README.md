@@ -55,8 +55,9 @@ ollama pull qwen2.5:7b-instruct     # default planner
 ```
 
 **The app is fully usable without Ollama** — manual transcript editing and the
-one-click *Remove silences / Remove fillers / Captions / 9:16* actions are
-deterministic and never touch the LLM.
+one-click *Remove silences / Remove fillers / Tighten / Remove retakes / Captions
+/ 9:16* actions are deterministic and never touch the LLM. (Retake detection is
+lexical, so it needs no ML deps either.)
 
 ## How it works
 
@@ -71,6 +72,15 @@ deterministic and never touch the LLM.
 - **Preview without rendering** — the original file stays in `<video>`; a
   `requestAnimationFrame` loop skips over cut regions. Captions and 9:16 are
   cosmetic DOM/CSS previews of what export burns in.
+- **Editing aids** — a cached audio **waveform** under the timeline (ffmpeg peaks
+  → canvas), optional **confidence shading** of low-probability transcript words,
+  a **Tighten** pass that caps every pause, and **retake removal** that keeps only
+  the last clean attempt at a repeated line. Export options are remembered per
+  project.
+- **Workspaces (multi-clip)** — group two or more clips into one workspace, edit
+  each with the full toolset via clip tabs, and **export them stitched A→B→…** as
+  a single file (normalized to one canvas/fps, captions offset per clip). Each
+  clip stays an independent project; the workspace just orders them.
 - **Export** — ffmpeg re-encodes per keep-range (`trim/atrim` + `setpts` +
   `concat`), with ~15 ms audio fades so cuts don't click, ASS captions on the
   **output** timeline, and optional 9:16 crop. `h264_nvenc` when available,

@@ -79,13 +79,18 @@ def _header(edl: CompiledEDL, play_res: tuple[int, int]) -> str:
     )
 
 
-def build_ass(
+def caption_events(
     edl: CompiledEDL,
     transcript: Transcript,
-    play_res: tuple[int, int] = DEFAULT_PLAY_RES,
-) -> str:
-    """Return a complete ASS document for the surviving captions."""
-    keep = rm.normalize(edl.keep)
+    keep: rm.Ranges | None = None,
+    time_offset: float = 0.0,
+) -> list[tuple[float, float, str]]:
+    """Surviving caption events as ``(start, end, text)`` on the output timeline.
+
+    ``time_offset`` shifts every event later — used when stitching multiple
+    clips so clip B's captions land after clip A's output duration.
+    """
+    keep = rm.normalize(edl.keep if keep is None else keep)
     cap = edl.captions
     events: list[tuple[float, float, str]] = []
 
@@ -95,19 +100,35 @@ def build_ass(
             continue
         if cap.granularity == "word":
             for w in surviving:
-                s = rm.remap_time(w.start, keep)
-                e = rm.remap_time(w.end, keep)
+                s = rm.remap_time(w.start, keep) + time_offset
+                e = rm.remap_time(w.end, keep) + time_offset
                 if e - s < 0.05:
                     e = s + 0.05
                 events.append((s, e, _escape(w.w)))
         else:  # segment
-            s = rm.remap_time(surviving[0].start, keep)
-            e = rm.remap_time(surviving[-1].end, keep)
+            s = rm.remap_time(surviving[0].start, keep) + time_offset
+            e = rm.remap_time(surviving[-1].end, keep) + time_offset
             text = _wrap([w.w for w in surviving], cap.max_lines)
             events.append((s, e, text))
+    return events
 
-    events.sort(key=lambda ev: ev[0])
-    lines = [_header(edl, play_res)]
-    for s, e, text in events:
+
+def render_ass(
+    events: list[tuple[float, float, str]],
+    style_edl: CompiledEDL,
+    play_res: tuple[int, int] = DEFAULT_PLAY_RES,
+) -> str:
+    """Render caption events into a complete ASS document."""
+    lines = [_header(style_edl, play_res)]
+    for s, e, text in sorted(events, key=lambda ev: ev[0]):
         lines.append(f"Dialogue: 0,{_ass_time(s)},{_ass_time(e)},Default,,0,0,0,,{text}\n")
     return "".join(lines)
+
+
+def build_ass(
+    edl: CompiledEDL,
+    transcript: Transcript,
+    play_res: tuple[int, int] = DEFAULT_PLAY_RES,
+) -> str:
+    """Return a complete ASS document for the surviving captions."""
+    return render_ass(caption_events(edl, transcript), edl, play_res)

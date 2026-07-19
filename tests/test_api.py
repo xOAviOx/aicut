@@ -252,6 +252,86 @@ def test_one_click_unknown_400(client, media_file, simple_transcript):
     assert client.post(f"/api/projects/{pid}/actions/nope").status_code == 400
 
 
+def test_one_click_tighten(client, media_file, simple_transcript):
+    pid = _ready_project(client, media_file, simple_transcript)
+    r = client.post(f"/api/projects/{pid}/actions/tighten")
+    assert r.status_code == 200
+    proj = r.json()["project"]
+    assert len(proj["revisions"]) == 2
+    assert "tighten" in proj["revisions"][-1]["label"].lower()
+
+
+def test_one_click_remove_retakes(client, media_file, simple_transcript):
+    pid = _ready_project(client, media_file, simple_transcript)
+    r = client.post(f"/api/projects/{pid}/actions/remove_retakes")
+    assert r.status_code == 200
+    assert "retake" in r.json()["project"]["revisions"][-1]["label"].lower()
+
+
+def test_waveform_endpoint(client, media_file, simple_transcript):
+    pid = _ready_project(client, media_file, simple_transcript)
+    r = client.get(f"/media/{pid}/waveform")
+    assert r.status_code == 200
+    body = r.json()
+    assert "peaks" in body and isinstance(body["peaks"], list)  # empty for non-audio input
+
+
+def test_workspace_create_from_clip_ids(client, media_file, simple_transcript):
+    a = _ready_project(client, media_file, simple_transcript)
+    b = _ready_project(client, media_file, simple_transcript)
+    r = client.post("/api/workspaces", json={"name": "Combo", "clip_ids": [a, b]})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["workspace"]["name"] == "Combo"
+    assert body["workspace"]["clip_ids"] == [a, b]
+    assert len(body["clips"]) == 2
+    assert body["clips"][0]["transcript"] is not None
+
+
+def test_workspace_needs_a_clip(client):
+    assert client.post("/api/workspaces", json={"name": "empty"}).status_code == 400
+
+
+def test_workspace_add_remove_reorder(client, media_file, simple_transcript):
+    a = _ready_project(client, media_file, simple_transcript)
+    b = _ready_project(client, media_file, simple_transcript)
+    c = _ready_project(client, media_file, simple_transcript)
+    wid = client.post("/api/workspaces", json={"clip_ids": [a]}).json()["workspace"]["id"]
+
+    # add b, then c
+    client.post(f"/api/workspaces/{wid}/clips", json={"project_id": b})
+    body = client.post(f"/api/workspaces/{wid}/clips", json={"project_id": c}).json()
+    assert body["workspace"]["clip_ids"] == [a, b, c]
+
+    # reorder
+    body = client.post(f"/api/workspaces/{wid}", json={"clip_ids": [c, a, b]}).json()
+    assert body["workspace"]["clip_ids"] == [c, a, b]
+
+    # remove a
+    body = client.request("DELETE", f"/api/workspaces/{wid}/clips/{a}").json()
+    assert body["workspace"]["clip_ids"] == [c, b]
+
+    # list + delete
+    assert any(w["workspace"]["id"] == wid for w in client.get("/api/workspaces").json()["workspaces"])
+    assert client.delete(f"/api/workspaces/{wid}").json()["ok"] is True
+    assert client.get(f"/api/workspaces/{wid}").status_code == 404
+
+
+def test_export_remembers_preset(client, media_file, simple_transcript):
+    pid = _ready_project(client, media_file, simple_transcript)
+    client.post(
+        f"/api/projects/{pid}/export",
+        json={"aspect": "9:16", "captions": True, "granularity": "word", "quality": "high"},
+    )
+    settings = client.get(f"/api/projects/{pid}").json()["project"]["settings"]
+    preset = settings["export_preset"]
+    assert preset is not None
+    assert preset["aspect"] == "9:16"
+    assert preset["captions"] is True
+    assert preset["granularity"] == "word"
+    assert preset["quality"] == "high"
+
+
 def test_command_success(client, media_file, simple_transcript):
     pid = _ready_project(client, media_file, simple_transcript)
     r = client.post(f"/api/projects/{pid}/command", json={"instruction": "cut the silences"})

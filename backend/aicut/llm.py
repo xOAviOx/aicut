@@ -41,8 +41,10 @@ You NEVER invent timestamps. Reference transcript segments by their [id]. A
 deterministic compiler resolves ids to exact times.
 
 Available actions (discriminated by "type"):
-- {"type":"remove_silences","min_gap_s":0.6,"pad_s":0.08}  # tighten dead air
+- {"type":"remove_silences","min_gap_s":0.6,"pad_s":0.08}  # remove long dead-air gaps
 - {"type":"remove_fillers","words":["um","uh",...]}         # omit words for defaults
+- {"type":"tighten","max_gap_s":0.35}                       # cap ALL pauses, incl. within sentences (punchier than remove_silences)
+- {"type":"remove_retakes","similarity":0.8}                # drop repeated attempts at a line, keep the last clean take
 - {"type":"trim","mode":"before|after","anchor":{"kind":"segment_id","value":<id>}}
 - {"type":"filter_topic","mode":"keep|remove","query":"<topic>","segment_ids":[<id>,...]}
     # ALWAYS include segment_ids you judge relevant to the query from the transcript.
@@ -53,6 +55,7 @@ Available actions (discriminated by "type"):
 
 Rules:
 - Prefer trim/filter_topic/remove_* over raw cut_ranges.
+- For "tighten"/"punchier"/"snappier"/"remove all pauses" use tighten. For "remove mistakes"/"keep the last take"/"cut the retakes" use remove_retakes.
 - For "vertical"/"shorts"/"reels" use set_aspect 9:16. For "subtitle"/"captions" use set_captions.
 - Keep "notes" to one short human sentence describing what you did.
 """

@@ -21,6 +21,9 @@ class Word(BaseModel):
     w: str
     start: float
     end: float
+    # Whisper's per-word probability (0..1), when available. Optional so older
+    # cached transcripts and hand-built fixtures still validate.
+    prob: float | None = None
 
 
 class Segment(BaseModel):
@@ -112,6 +115,25 @@ class RemoveFillers(BaseModel):
     words: list[str] = Field(default_factory=lambda: list(DEFAULT_FILLERS))
 
 
+class Tighten(BaseModel):
+    """Cap *every* inter-word pause (including intra-sentence ones) to
+    ``max_gap_s``. More aggressive than :class:`RemoveSilences`, which only
+    removes gaps wider than its ``min_gap_s`` threshold."""
+
+    type: Literal["tighten"] = "tighten"
+    max_gap_s: float = 0.35
+    pad_s: float = 0.05
+
+
+class RemoveRetakes(BaseModel):
+    """Detect repeated attempts at the same line and keep only the last clean
+    take, cutting the earlier ones. Lexical (no ML dep): compares adjacent
+    segments by normalized-token similarity."""
+
+    type: Literal["remove_retakes"] = "remove_retakes"
+    similarity: float = 0.8
+
+
 class Trim(BaseModel):
     type: Literal["trim"] = "trim"
     mode: Literal["before", "after"]
@@ -163,6 +185,8 @@ class SetAspect(BaseModel):
 Action = Annotated[
     RemoveSilences
     | RemoveFillers
+    | Tighten
+    | RemoveRetakes
     | Trim
     | FilterTopic
     | CutRanges
@@ -222,9 +246,20 @@ class Revision(BaseModel):
 TranscriptStatus = Literal["pending", "running", "ready", "error"]
 
 
+class ExportPresetSettings(BaseModel):
+    """The last export options a project used — remembered so the Export dialog
+    reopens where you left it."""
+
+    aspect: Aspect | None = None
+    captions: bool | None = None
+    granularity: CaptionGranularity = "segment"
+    quality: str = "balanced"
+
+
 class ProjectSettings(BaseModel):
     captions: CaptionSettings = Field(default_factory=CaptionSettings)
     aspect: Aspect = "source"
+    export_preset: ExportPresetSettings | None = None
 
 
 class Project(BaseModel):
@@ -256,3 +291,19 @@ class Project(BaseModel):
             if r.id == rid:
                 return i
         return -1
+
+
+# ---------------------------------------------------------------------------
+# Workspace — an ordered group of clips (each clip is a Project) edited together
+# ---------------------------------------------------------------------------
+
+
+class Workspace(BaseModel):
+    """A named, ordered collection of clips. Each clip is an ordinary
+    single-source :class:`Project`; a workspace just groups them so they can be
+    edited in one place and exported stitched A→B→…."""
+
+    id: str = Field(default_factory=_new_id)
+    name: str = ""
+    clip_ids: list[str] = Field(default_factory=list)
+    created_at: float = Field(default_factory=_now)

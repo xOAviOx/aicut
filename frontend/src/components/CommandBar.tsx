@@ -43,6 +43,18 @@ function OneClickButtons() {
         Remove fillers
       </Btn>
       <Btn
+        onClick={() => oneClick("tighten")}
+        title="Cap every pause — punchier than removing silences (no AI)"
+      >
+        Tighten
+      </Btn>
+      <Btn
+        onClick={() => oneClick("remove_retakes")}
+        title="Drop repeated attempts, keep the last take (no AI)"
+      >
+        Remove retakes
+      </Btn>
+      <Btn
         onClick={() => oneClick(captionsOn ? "captions_off" : "captions_on")}
         active={captionsOn}
       >
