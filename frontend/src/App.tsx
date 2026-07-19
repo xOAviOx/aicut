@@ -2,16 +2,22 @@ import { useEffect } from "react";
 import { useStore } from "./store";
 import Library from "./components/Library";
 import Editor from "./components/Editor";
+import WorkspaceBar from "./components/WorkspaceBar";
 
 export default function App() {
   const view = useStore((s) => s.view);
+  const workspace = useStore((s) => s.workspace);
   const openProject = useStore((s) => s.openProject);
+  const openWorkspace = useStore((s) => s.openWorkspace);
 
-  // Deep-link: /?open=<projectId> jumps straight into the editor.
+  // Deep-links: /?open=<projectId> or /?workspace=<workspaceId>.
   useEffect(() => {
-    const id = new URLSearchParams(window.location.search).get("open");
-    if (id) openProject(id);
-  }, [openProject]);
+    const params = new URLSearchParams(window.location.search);
+    const wid = params.get("workspace");
+    const id = params.get("open");
+    if (wid) openWorkspace(wid);
+    else if (id) openProject(id);
+  }, [openProject, openWorkspace]);
   return (
     <div className="flex h-full flex-col bg-ink-900">
       {view === "library" ? (
@@ -27,7 +33,12 @@ export default function App() {
           </main>
         </>
       ) : (
-        <Editor />
+        <div className="flex h-full min-h-0 flex-col">
+          {workspace && <WorkspaceBar />}
+          <div className="min-h-0 flex-1">
+            <Editor />
+          </div>
+        </div>
       )}
     </div>
   );

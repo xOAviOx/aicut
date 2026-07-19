@@ -19,6 +19,7 @@ from .models import (
     Project,
     Revision,
     Transcript,
+    Workspace,
 )
 
 
@@ -115,6 +116,15 @@ class ProjectStore:
             project.transcript_progress = 0.0
             self.save(project)
             return True
+
+    def remember_export_preset(self, pid: str, preset) -> None:
+        """Persist the last-used export options (field-scoped write)."""
+        with self._lock(pid):
+            project = self.get(pid)
+            if project is None:
+                return
+            project.settings.export_preset = preset
+            self.save(project)
 
     def set_thumbnail(self, pid: str, url: str) -> None:
         """Update just the thumbnail field, preserving any concurrent changes."""
@@ -228,6 +238,63 @@ class ProjectStore:
                     project.settings.aspect = head.edl.aspect
                 self.save(project)
             return project
+
+
+    # -- workspaces (ordered groups of clips) ----------------------------
+    def _workspace_file(self, wid: str) -> Path:
+        return self.settings.workspaces_dir / f"{wid}.json"
+
+    def save_workspace(self, ws: Workspace) -> None:
+        with self._lock(ws.id):
+            self.settings.workspaces_dir.mkdir(parents=True, exist_ok=True)
+            tmp = self._workspace_file(ws.id).with_suffix(".json.tmp")
+            tmp.write_text(ws.model_dump_json(indent=2), encoding="utf-8")
+            tmp.replace(self._workspace_file(ws.id))
+
+    def get_workspace(self, wid: str) -> Workspace | None:
+        f = self._workspace_file(wid)
+        if not f.exists():
+            return None
+        return Workspace.model_validate_json(f.read_text(encoding="utf-8"))
+
+    def list_workspaces(self) -> list[Workspace]:
+        out: list[Workspace] = []
+        d = self.settings.workspaces_dir
+        if not d.exists():
+            return out
+        for f in d.glob("*.json"):
+            try:
+                out.append(Workspace.model_validate_json(f.read_text(encoding="utf-8")))
+            except Exception:
+                continue
+        out.sort(key=lambda w: w.created_at, reverse=True)
+        return out
+
+    def create_workspace(self, name: str, clip_ids: list[str]) -> Workspace:
+        ws = Workspace(name=name or "Workspace", clip_ids=list(clip_ids))
+        self.save_workspace(ws)
+        return ws
+
+    def update_workspace(
+        self, wid: str, *, name: str | None = None, clip_ids: list[str] | None = None
+    ) -> Workspace | None:
+        with self._lock(wid):
+            ws = self.get_workspace(wid)
+            if ws is None:
+                return None
+            if name is not None:
+                ws.name = name
+            if clip_ids is not None:
+                ws.clip_ids = list(clip_ids)
+            self.save_workspace(ws)
+            return ws
+
+    def delete_workspace(self, wid: str) -> None:
+        """Ungroup the workspace. Clip projects are left intact."""
+        with self._lock(wid):
+            f = self._workspace_file(wid)
+            if f.exists():
+                f.unlink()
 
 
 _store: ProjectStore | None = None

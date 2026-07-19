@@ -15,6 +15,15 @@ interface FlatWord {
   end: number;
 }
 
+// Map whisper's per-word probability to a shading class (styled only when the
+// transcript container carries `.show-confidence`).
+function confClass(prob: number | null | undefined): string {
+  if (prob == null) return "";
+  if (prob < 0.5) return "word-lowconf";
+  if (prob < 0.72) return "word-midconf";
+  return "";
+}
+
 const SegmentRow = memo(function SegmentRow({
   seg,
   baseIndex,
@@ -42,7 +51,7 @@ const SegmentRow = memo(function SegmentRow({
             key={i}
             ref={(el) => registerEl(gi, el)}
             data-gi={gi}
-            className={`cursor-text select-none rounded-[3px] px-[1px] ${cut ? "word-cut" : ""}`}
+            className={`cursor-text select-none rounded-[3px] px-[1px] ${cut ? "word-cut" : ""} ${confClass(w.prob)}`}
           >
             {w.w}{" "}
           </span>
@@ -56,9 +65,11 @@ export default function Transcript() {
   const transcript = useStore((s) => s.transcript);
   const keep = useStore((s) => s.keepRanges());
   const showCutText = useStore((s) => s.showCutText);
+  const showConfidence = useStore((s) => s.showConfidence);
   const follow = useStore((s) => s.follow);
   const toggleFollow = useStore((s) => s.toggleFollow);
   const toggleShowCutText = useStore((s) => s.toggleShowCutText);
+  const toggleShowConfidence = useStore((s) => s.toggleShowConfidence);
   const setSelection = useStore((s) => s.setSelection);
 
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -254,6 +265,18 @@ export default function Transcript() {
             />
             show cut
           </label>
+          <label
+            className="flex cursor-pointer items-center gap-1.5 text-xs text-parchment-400"
+            title="Underline words whisper was unsure about (possible mishearings)"
+          >
+            <input
+              type="checkbox"
+              checked={showConfidence}
+              onChange={toggleShowConfidence}
+              className="accent-accent"
+            />
+            confidence
+          </label>
           <label className="flex cursor-pointer items-center gap-1.5 text-xs text-parchment-400">
             <input type="checkbox" checked={follow} onChange={toggleFollow} className="accent-accent" />
             follow
@@ -262,7 +285,7 @@ export default function Transcript() {
       </div>
       <div
         ref={scrollRef}
-        className="flex-1 overflow-y-auto px-6 py-5 font-reading text-transcript text-parchment-100"
+        className={`flex-1 overflow-y-auto px-6 py-5 font-reading text-transcript text-parchment-100 ${showConfidence ? "show-confidence" : ""}`}
       >
         {transcript.segments.map((seg, si) => (
           <SegmentRow

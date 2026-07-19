@@ -117,7 +117,12 @@ def transcribe(
         segments: list[Segment] = []
         for i, seg in enumerate(seg_iter):
             words = [
-                Word(w=w.word, start=float(w.start), end=float(w.end))
+                Word(
+                    w=w.word,
+                    start=float(w.start),
+                    end=float(w.end),
+                    prob=(float(w.probability) if getattr(w, "probability", None) is not None else None),
+                )
                 for w in (seg.words or [])
                 if w.start is not None and w.end is not None
             ]

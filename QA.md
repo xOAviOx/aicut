@@ -32,6 +32,16 @@ app must also work with **both** of those absent — that's steps 13–14.
 | 14 | **AI command (LLM down).** Stop Ollama and Run any command. | A clear inline error ("Ollama not reachable…"); the rest of the app keeps working. |
 | 15 | **Export.** Open **Export**, choose 9:16 + captions on + a quality, click Export video. | Progress bar advances via SSE; a finished file appears with a working download link; the file plays with correctly-timed burned captions and click-free cuts. |
 
+## Post-v1 feature checks
+
+| # | Step | Expected |
+|---|------|----------|
+| 16 | **Waveform.** Look at the timeline strip under the player. | An audio waveform envelope is drawn; kept regions are tinted, cut regions dimmed; playhead tracks. Audio-less clips just show no waveform (no error). |
+| 17 | **Tighten.** Click **Tighten**. | Duration drops (more than plain *Remove silences*, since intra-sentence pauses are capped too); a "Tightened pauses" revision is logged. |
+| 18 | **Remove retakes.** On a clip with a repeated line, click **Remove retakes**. | Earlier attempts are cut, the last take stays; a "Removed retakes" revision is logged. Works with Ollama and the ML extra both absent. |
+| 19 | **Confidence shading.** Toggle **confidence** in the transcript header. | Low-probability words get a dotted underline; toggling is instant and doesn't stutter the transcript. Toggle off → underlines vanish. |
+| 20 | **Export presets remembered.** Export once with 9:16 + captions, close, reopen **Export**. | The dialog reopens with the same aspect/captions/quality you last used. |
+
 ## Things to specifically watch for
 
 - **No stutter** scrolling/among 5k+ words while playing (the transcript must not

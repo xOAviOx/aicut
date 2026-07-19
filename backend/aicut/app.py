@@ -26,14 +26,18 @@ from .llm import LLMUnavailable, PlanError, Planner, state_summary
 from .models import (
     Action,
     EditPlan,
+    ExportPresetSettings,
     RemoveFillers,
+    RemoveRetakes,
     RemoveSilences,
     SetAspect,
     SetCaptions,
+    Tighten,
     Transcript,
 )
 from .project import ProjectStore
 from .services import ExportService, TranscriptionService, import_media_path
+from .waveform import get_or_build_peaks
 
 # Held references to detached background tasks so they aren't GC'd.
 _bg_tasks: set[asyncio.Task] = set()
@@ -81,6 +85,10 @@ def create_app(
 ONE_CLICK: dict[str, EditPlan] = {
     "remove_silences": EditPlan(actions=[RemoveSilences()], notes="Removed silences."),
     "remove_fillers": EditPlan(actions=[RemoveFillers()], notes="Removed filler words."),
+    "tighten": EditPlan(actions=[Tighten()], notes="Tightened pauses."),
+    "remove_retakes": EditPlan(
+        actions=[RemoveRetakes()], notes="Removed repeated takes, kept the last."
+    ),
     "captions_on": EditPlan(
         actions=[SetCaptions(enabled=True, granularity="segment")], notes="Captions on."
     ),
@@ -121,6 +129,24 @@ class ExportBody(BaseModel):
     captions: bool | None = None
     granularity: str | None = None
     quality: str = "balanced"
+    # Other project ids to stitch after this one (append / merge). Empty = single.
+    append_project_ids: list[str] = []
+
+
+class CreateWorkspaceBody(BaseModel):
+    name: str | None = None
+    clip_ids: list[str] = []  # group existing projects
+    paths: list[str] = []  # or import new videos as clips
+
+
+class AddClipBody(BaseModel):
+    project_id: str | None = None
+    path: str | None = None
+
+
+class UpdateWorkspaceBody(BaseModel):
+    name: str | None = None
+    clip_ids: list[str] | None = None  # reorder
 
 
 def _spawn(coro) -> None:
@@ -138,6 +164,25 @@ def _project_payload(store: ProjectStore, pid: str) -> dict[str, Any]:
         "project": project.model_dump(),
         "transcript": transcript.model_dump() if transcript else None,
     }
+
+
+def _workspace_payload(store: ProjectStore, wid: str) -> dict[str, Any]:
+    ws = store.get_workspace(wid)
+    if ws is None:
+        raise HTTPException(404, "workspace not found")
+    clips = []
+    for cid in ws.clip_ids:
+        project = store.get(cid)
+        if project is None:
+            continue
+        transcript = store.get_transcript(cid)
+        clips.append(
+            {
+                "project": project.model_dump(),
+                "transcript": transcript.model_dump() if transcript else None,
+            }
+        )
+    return {"workspace": ws.model_dump(), "clips": clips}
 
 
 def _register_routes(app: FastAPI) -> None:
@@ -183,6 +228,80 @@ def _register_routes(app: FastAPI) -> None:
     def delete_project(pid: str) -> dict:
         store.delete(pid)
         return {"ok": True}
+
+    # -- workspaces (edit multiple clips together) -----------------------
+    def _import_clip(raw: str) -> str:
+        path, err = import_media_path(raw)
+        if err:
+            raise HTTPException(400, err)
+        proj = store.create(str(path))
+        _spawn(asyncio.to_thread(transcription.run, proj.id))
+        return proj.id
+
+    @app.get("/api/workspaces")
+    def list_workspaces() -> dict:
+        out = []
+        for ws in store.list_workspaces():
+            clips = [store.get(cid) for cid in ws.clip_ids]
+            out.append(
+                {
+                    "workspace": ws.model_dump(),
+                    "clips": [c.model_dump() for c in clips if c is not None],
+                }
+            )
+        return {"workspaces": out}
+
+    @app.post("/api/workspaces")
+    async def create_workspace(body: CreateWorkspaceBody) -> dict:
+        clip_ids = [cid for cid in body.clip_ids if store.get(cid) is not None]
+        for raw in body.paths:
+            clip_ids.append(_import_clip(raw))
+        if not clip_ids:
+            raise HTTPException(400, "a workspace needs at least one clip")
+        ws = store.create_workspace(body.name or "Workspace", clip_ids)
+        return _workspace_payload(store, ws.id)
+
+    @app.get("/api/workspaces/{wid}")
+    def get_workspace(wid: str) -> dict:
+        return _workspace_payload(store, wid)
+
+    @app.post("/api/workspaces/{wid}")
+    def update_workspace(wid: str, body: UpdateWorkspaceBody) -> dict:
+        ws = store.get_workspace(wid)
+        if ws is None:
+            raise HTTPException(404, "workspace not found")
+        clip_ids = body.clip_ids
+        if clip_ids is not None:
+            # keep only known projects, preserve requested order
+            clip_ids = [cid for cid in clip_ids if store.get(cid) is not None]
+        store.update_workspace(wid, name=body.name, clip_ids=clip_ids)
+        return _workspace_payload(store, wid)
+
+    @app.delete("/api/workspaces/{wid}")
+    def delete_workspace(wid: str) -> dict:
+        store.delete_workspace(wid)
+        return {"ok": True}
+
+    @app.post("/api/workspaces/{wid}/clips")
+    async def add_clip(wid: str, body: AddClipBody) -> dict:
+        ws = store.get_workspace(wid)
+        if ws is None:
+            raise HTTPException(404, "workspace not found")
+        cid = body.project_id
+        if body.path:
+            cid = _import_clip(body.path)
+        if not cid or store.get(cid) is None:
+            raise HTTPException(400, "provide a valid project_id or path")
+        store.update_workspace(wid, clip_ids=[*ws.clip_ids, cid])
+        return _workspace_payload(store, wid)
+
+    @app.delete("/api/workspaces/{wid}/clips/{cid}")
+    def remove_clip(wid: str, cid: str) -> dict:
+        ws = store.get_workspace(wid)
+        if ws is None:
+            raise HTTPException(404, "workspace not found")
+        store.update_workspace(wid, clip_ids=[c for c in ws.clip_ids if c != cid])
+        return _workspace_payload(store, wid)
 
     # -- attach transcript directly (import existing / no-ML path) --------
     @app.post("/api/projects/{pid}/transcript")
@@ -310,6 +429,17 @@ def _register_routes(app: FastAPI) -> None:
             raise HTTPException(409, "transcript not ready")
         import uuid
 
+        # Remember these options so the Export dialog reopens where it left off.
+        store.remember_export_preset(
+            pid,
+            ExportPresetSettings(
+                aspect=body.aspect,  # type: ignore[arg-type]
+                captions=body.captions,
+                granularity=body.granularity or "segment",  # type: ignore[arg-type]
+                quality=body.quality,
+            ),
+        )
+
         job_id = uuid.uuid4().hex
         _spawn(asyncio.to_thread(app.state.export.run, pid, body.model_dump(), job_id))
         return {"job_id": job_id}
@@ -364,6 +494,18 @@ def _register_routes(app: FastAPI) -> None:
             raise HTTPException(404, "media file missing")
         # Starlette's FileResponse honors the Range header (206 + Content-Range).
         return FileResponse(path, headers={"Accept-Ranges": "bytes"})
+
+    @app.get("/media/{pid}/waveform")
+    def waveform(pid: str):
+        project = store.get(pid)
+        if project is None:
+            raise HTTPException(404, "project not found")
+        path = Path(project.source_path)
+        if not path.exists():
+            raise HTTPException(404, "media file missing")
+        cache = store.settings.project_dir(pid) / "waveform.json"
+        peaks = get_or_build_peaks(path, cache)
+        return {"peaks": peaks, "duration": project.duration}
 
     @app.get("/media/{pid}/thumb")
     def thumb(pid: str):

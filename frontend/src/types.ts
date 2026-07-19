@@ -9,6 +9,7 @@ export interface Word {
   w: string;
   start: number;
   end: number;
+  prob?: number | null;
 }
 
 export interface Segment {
@@ -51,9 +52,17 @@ export interface Revision {
   created_at: number;
 }
 
+export interface ExportPresetSettings {
+  aspect: Aspect | null;
+  captions: boolean | null;
+  granularity: CaptionGranularity;
+  quality: string;
+}
+
 export interface ProjectSettings {
   captions: CaptionSettings;
   aspect: Aspect;
+  export_preset?: ExportPresetSettings | null;
 }
 
 export interface Project {
@@ -85,4 +94,11 @@ export interface CommandResult {
   summary?: string;
   notes?: string;
   error?: string;
+}
+
+export interface Workspace {
+  id: string;
+  name: string;
+  clip_ids: string[];
+  created_at: number;
 }

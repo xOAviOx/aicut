@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { api, type ProjectPayload } from "./api";
 import { clock } from "./lib/clock";
-import type { CompiledEDL, Project, Span, Transcript, WordRef } from "./types";
+import type { CompiledEDL, Project, Span, Transcript, WordRef, Workspace } from "./types";
 import { coordsToWordRefs, type WordCoord } from "./lib/transcriptSelection";
 
 export type PreviewMode = "edited" | "original";
@@ -25,6 +25,7 @@ interface State {
   follow: boolean;
   playing: boolean;
   showCutText: boolean;
+  showConfidence: boolean;
 
   // transcript selection (word coords), M3
   selection: WordCoord[];
@@ -41,6 +42,11 @@ interface State {
   exportProgress: number;
   exportError: string | null;
   exports: { name: string; url: string; size: number }[];
+
+  // multi-clip workspace
+  workspace: Workspace | null;
+  workspaceClips: Project[];
+  workspaceExportUrl: string | null;
 
   _unsub: (() => void) | null;
 
@@ -62,6 +68,7 @@ interface State {
   togglePreviewMode: () => void;
   toggleFollow: () => void;
   toggleShowCutText: () => void;
+  toggleShowConfidence: () => void;
   setPlaying: (p: boolean) => void;
 
   setSelection: (coords: WordCoord[], anchor?: number | null) => void;
@@ -76,12 +83,29 @@ interface State {
   dismissCommandError: () => void;
   clearError: () => void;
 
-  startExport: (preset: { aspect?: string; captions?: boolean; quality: string }) => Promise<void>;
+  startExport: (preset: {
+    aspect?: string;
+    captions?: boolean;
+    granularity?: string;
+    quality: string;
+    append_project_ids?: string[];
+  }) => Promise<void>;
   loadExports: () => Promise<void>;
 
   undo: () => Promise<void>;
   redo: () => Promise<void>;
   gotoRevision: (revId: string) => Promise<void>;
+
+  openWorkspace: (id: string) => Promise<void>;
+  selectClip: (clipId: string) => Promise<void>;
+  addClipToWorkspace: (path: string) => Promise<void>;
+  removeClipFromWorkspace: (clipId: string) => Promise<void>;
+  exportWorkspace: (preset: {
+    aspect?: string;
+    captions?: boolean;
+    granularity?: string;
+    quality: string;
+  }) => Promise<void>;
 }
 
 export const useStore = create<State>((set, get) => ({
@@ -97,6 +121,7 @@ export const useStore = create<State>((set, get) => ({
   follow: true,
   playing: false,
   showCutText: true,
+  showConfidence: false,
 
   selection: [],
   selectionAnchor: null,
@@ -112,6 +137,10 @@ export const useStore = create<State>((set, get) => ({
   exportProgress: 0,
   exportError: null,
   exports: [],
+
+  workspace: null,
+  workspaceClips: [],
+  workspaceExportUrl: null,
 
   _unsub: null,
 
@@ -176,7 +205,15 @@ export const useStore = create<State>((set, get) => ({
 
   closeProject: () => {
     get()._unsub?.();
-    set({ view: "library", project: null, transcript: null, _unsub: null });
+    set({
+      view: "library",
+      project: null,
+      transcript: null,
+      _unsub: null,
+      workspace: null,
+      workspaceClips: [],
+      workspaceExportUrl: null,
+    });
     get().init();
   },
 
@@ -221,6 +258,15 @@ export const useStore = create<State>((set, get) => ({
   applyPayload: (payload) => {
     set({ project: payload.project, transcript: payload.transcript });
     if (payload.transcript) clock.duration = payload.transcript.duration;
+    // keep the workspace clip rail's copy of this project fresh (for combined
+    // duration + status) as its edits change.
+    if (get().workspace) {
+      set({
+        workspaceClips: get().workspaceClips.map((c) =>
+          c.id === payload.project.id ? payload.project : c,
+        ),
+      });
+    }
   },
 
   setPreviewMode: (m) => set({ previewMode: m }),
@@ -228,6 +274,7 @@ export const useStore = create<State>((set, get) => ({
     set({ previewMode: get().previewMode === "edited" ? "original" : "edited" }),
   toggleFollow: () => set({ follow: !get().follow }),
   toggleShowCutText: () => set({ showCutText: !get().showCutText }),
+  toggleShowConfidence: () => set({ showConfidence: !get().showConfidence }),
   setPlaying: (p) => set({ playing: p }),
 
   setSelection: (coords, anchor = null) =>
@@ -337,5 +384,73 @@ export const useStore = create<State>((set, get) => ({
     if (!project) return;
     get().applyPayload(await api.gotoRevision(project.id, revId));
     get().clearSelection();
+  },
+
+  // -- multi-clip workspace ---------------------------------------------
+  openWorkspace: async (id) => {
+    set({ busy: true, error: null });
+    try {
+      const wp = await api.getWorkspace(id);
+      set({
+        workspace: wp.workspace,
+        workspaceClips: wp.clips.map((c) => c.project),
+        workspaceExportUrl: null,
+        busy: false,
+      });
+      const first = wp.workspace.clip_ids[0];
+      if (first) await get().openProject(first);
+    } catch (e) {
+      set({ error: String(e), busy: false });
+    }
+  },
+  selectClip: async (clipId) => {
+    if (get().project?.id === clipId) return;
+    await get().openProject(clipId);
+  },
+  addClipToWorkspace: async (path) => {
+    const ws = get().workspace;
+    if (!ws || !path.trim()) return;
+    set({ busy: true, error: null });
+    try {
+      const wp = await api.addClip(ws.id, { path: path.trim() });
+      set({ workspace: wp.workspace, workspaceClips: wp.clips.map((c) => c.project), busy: false });
+    } catch (e) {
+      set({ error: String(e), busy: false });
+    }
+  },
+  removeClipFromWorkspace: async (clipId) => {
+    const ws = get().workspace;
+    if (!ws) return;
+    const wp = await api.removeClip(ws.id, clipId);
+    set({ workspace: wp.workspace, workspaceClips: wp.clips.map((c) => c.project) });
+    if (get().project?.id === clipId && wp.workspace.clip_ids[0]) {
+      await get().selectClip(wp.workspace.clip_ids[0]);
+    }
+  },
+  exportWorkspace: async (preset) => {
+    const ws = get().workspace;
+    if (!ws || ws.clip_ids.length === 0) return;
+    const [first, ...rest] = ws.clip_ids;
+    set({ exportStatus: "running", exportProgress: 0, exportError: null, workspaceExportUrl: null });
+    let unsub: () => void = () => {};
+    unsub = api.events(first, (e, type) => {
+      if (type !== "export") return;
+      const d = JSON.parse(e.data);
+      if (d.status === "running") {
+        set({ exportProgress: d.progress ?? 0 });
+      } else if (d.status === "done") {
+        set({ exportStatus: "done", exportProgress: 1, workspaceExportUrl: d.url ?? null });
+        unsub();
+      } else if (d.status === "error") {
+        set({ exportStatus: "error", exportError: d.error ?? "merge failed" });
+        unsub();
+      }
+    });
+    try {
+      await api.export(first, { ...preset, append_project_ids: rest });
+    } catch (e) {
+      set({ exportStatus: "error", exportError: String(e) });
+      unsub();
+    }
   },
 }));

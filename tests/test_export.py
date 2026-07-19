@@ -3,11 +3,21 @@
 from __future__ import annotations
 
 import shutil
+import subprocess
 
 import pytest
 
+from aicut.ass_builder import caption_events
 from aicut.edl import compile_plan, initial_edl
-from aicut.ffmpeg_export import build_command, build_filtergraph, export
+from aicut.ffmpeg_export import (
+    ExportPreset,
+    MergeClip,
+    build_command,
+    build_filtergraph,
+    build_merge_filtergraph,
+    export,
+    export_merge,
+)
 from aicut.media import probe_duration, video_dimensions
 from aicut.models import (
     EditPlan,
@@ -17,6 +27,7 @@ from aicut.models import (
     SetCaptions,
     Transcript,
 )
+from conftest import segment_from
 from make_fixture import ensure_fixture
 
 
@@ -60,6 +71,75 @@ class TestFiltergraph:
         assert "-filter_complex_script" in cmd
         assert "filter.txt" in cmd
         assert "+faststart" in cmd
+
+
+class TestMergeFiltergraph:
+    def _clips(self):
+        ta = Transcript(source="a", duration=3.0, language="en", segments=[])
+        tb = Transcript(source="b", duration=3.0, language="en", segments=[])
+        return [
+            MergeClip(src="a.mp4", keep=[(0, 1.5)], transcript=ta, src_dims=(640, 360)),
+            MergeClip(src="b.mp4", keep=[(0, 1.0), (2, 3)], transcript=tb, src_dims=(1280, 720)),
+        ]
+
+    def test_two_inputs_concatenated(self):
+        graph, v, a = build_merge_filtergraph(self._clips(), "source", (1280, 720), 30, None, True)
+        assert "[0:v]trim=start=0.000:end=1.500" in graph  # clip A
+        assert "[1:v]trim=start=2.000:end=3.000" in graph  # clip B, second keep
+        # 3 total segments (1 from A, 2 from B)
+        assert "concat=n=3:v=1:a=1" in graph
+        assert "fps=30" in graph
+        assert v == "[vcat]" and a == "[acat]"
+
+    def test_no_audio_when_any_clip_silent(self):
+        graph, _v, a = build_merge_filtergraph(self._clips(), "source", (640, 360), 30, None, False)
+        assert "concat=n=3:v=1:a=0" in graph
+        assert a is None
+
+    def test_captions_offset_by_prior_clip_output(self):
+        # clip A keeps 2s of a word at t=0.5; clip B's caption must land after 2s
+        seg_a = segment_from(0, "hello world here", 0.0)  # ~0.9s of words
+        ta = Transcript(source="a", duration=3.0, language="en", segments=[seg_a])
+        from aicut.models import CaptionSettings, CompiledEDL
+
+        cap = CaptionSettings(enabled=True, granularity="segment")
+        edl = CompiledEDL(keep=[(0.0, 3.0)], captions=cap)
+        base = caption_events(edl, ta, keep=[(0.0, 3.0)], time_offset=0.0)
+        shifted = caption_events(edl, ta, keep=[(0.0, 3.0)], time_offset=2.0)
+        assert base and shifted
+        assert abs(shifted[0][0] - (base[0][0] + 2.0)) < 1e-6
+
+
+def _make_clip(path, dur: float = 2.0, size: str = "320x240", freq: int = 220) -> None:
+    subprocess.run(
+        [
+            "ffmpeg", "-y",
+            "-f", "lavfi", "-i", f"testsrc2=size={size}:rate=25:duration={dur}",
+            "-f", "lavfi", "-i", f"sine=frequency={freq}:duration={dur}",
+            "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-shortest", str(path),
+        ],
+        check=True,
+        capture_output=True,
+    )
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg not installed")
+def test_merge_two_clips_renders(tmp_path):
+    a, b = tmp_path / "a.mp4", tmp_path / "b.mp4"
+    _make_clip(a, 2.0, freq=220)
+    _make_clip(b, 2.0, freq=440)
+    ta = Transcript(source=str(a), duration=2.0, language="en", segments=[])
+    tb = Transcript(source=str(b), duration=2.0, language="en", segments=[])
+    clips = [
+        MergeClip(src=a, keep=[(0.0, 1.5)], transcript=ta, src_dims=(320, 240), has_audio=True),
+        MergeClip(src=b, keep=[(0.0, 1.0)], transcript=tb, src_dims=(320, 240), has_audio=True),
+    ]
+    out = tmp_path / "merged.mp4"
+    export_merge(clips, out, ExportPreset(aspect="source", quality="fast"))
+    assert out.exists() and out.stat().st_size > 0
+    # kept 1.5s + 1.0s ~= 2.5s
+    assert abs(probe_duration(out) - 2.5) < 0.7
 
 
 @pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg not installed")

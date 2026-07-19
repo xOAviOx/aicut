@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
+from difflib import SequenceMatcher
 
 from . import rangemath as rm
 from .models import (
@@ -26,10 +27,13 @@ from .models import (
     FilterTopic,
     KeepRanges,
     RemoveFillers,
+    RemoveRetakes,
     RemoveSilences,
     RestoreWords,
+    Segment,
     SetAspect,
     SetCaptions,
+    Tighten,
     Transcript,
     Trim,
     WordRef,
@@ -124,6 +128,85 @@ def _filler_cuts(t: Transcript, filler_words: list[str]) -> rm.Ranges:
     return rm.clamp(cuts, 0.0, t.duration)
 
 
+def _tighten_cuts(t: Transcript, max_gap_s: float, pad_s: float) -> rm.Ranges:
+    """Cut ranges that cap *every* inter-word gap to ``max_gap_s``.
+
+    Unlike :func:`_silence_cuts` (which only touches gaps wider than a large
+    ``min_gap_s``), this trims the excess out of *all* pauses — including the
+    short breaths within a sentence — leaving at most ``max_gap_s`` of each.
+    """
+    words = [w for seg in t.segments for w in seg.words if w.end > w.start]
+    words.sort(key=lambda w: w.start)
+    cuts: rm.Ranges = []
+    if not words:
+        return cuts
+    half = max_gap_s / 2.0
+    # leading dead air beyond the cap
+    if words[0].start > max_gap_s:
+        cuts.append((0.0, words[0].start - max_gap_s))
+    for a, b in zip(words, words[1:], strict=False):
+        gap = b.start - a.end
+        if gap > max_gap_s + pad_s:
+            cuts.append((a.end + half, b.start - half))
+    # trailing dead air beyond the cap
+    if t.duration - words[-1].end > max_gap_s:
+        cuts.append((words[-1].end + max_gap_s, t.duration))
+    return rm.clamp(cuts, 0.0, t.duration)
+
+
+def _seg_tokens(seg: Segment) -> list[str]:
+    """Normalized token list for a segment (word timings preferred over text)."""
+    source = [w.w for w in seg.words] if seg.words else seg.text.split()
+    return [tok for tok in (_norm_token(w) for w in source) if tok]
+
+
+def _contiguous_subseq(short: list[str], long: list[str]) -> bool:
+    if not short or len(short) > len(long):
+        return False
+    first = short[0]
+    span = len(short)
+    for i in range(len(long) - span + 1):
+        if long[i] == first and long[i : i + span] == short:
+            return True
+    return False
+
+
+def retake_similarity(a: list[str], b: list[str]) -> float:
+    """Similarity of two token lists in [0, 1].
+
+    Uses :class:`difflib.SequenceMatcher` for near-verbatim overlap, with a
+    containment boost so an abandoned false start (a prefix of the retake) still
+    scores as a duplicate.
+    """
+    if not a or not b:
+        return 0.0
+    ratio = SequenceMatcher(None, a, b).ratio()
+    short, long = (a, b) if len(a) <= len(b) else (b, a)
+    if len(short) >= 3 and _contiguous_subseq(short, long):
+        cover = len(short) / len(long)
+        ratio = max(ratio, 0.6 + 0.4 * cover)
+    return ratio
+
+
+def _retake_cuts(t: Transcript, similarity: float) -> rm.Ranges:
+    """Cut earlier attempts of repeated lines, keeping the last take.
+
+    Compares each segment with the next; when they're near-duplicates the
+    earlier one is cut up to the start of its retake. Chains (A≈B≈C) collapse
+    naturally to just C because each adjacent pair contributes a cut.
+    """
+    segs = t.segments
+    cuts: rm.Ranges = []
+    for i in range(len(segs) - 1):
+        a = _seg_tokens(segs[i])
+        b = _seg_tokens(segs[i + 1])
+        if len(a) < 2 or len(b) < 2:
+            continue
+        if retake_similarity(a, b) >= similarity:
+            cuts.append((segs[i].start, segs[i + 1].start))
+    return rm.clamp(cuts, 0.0, t.duration)
+
+
 def _resolve_word_refs(t: Transcript, refs: list[WordRef]) -> rm.Ranges:
     spans: rm.Ranges = []
     for ref in refs:
@@ -176,6 +259,14 @@ def apply_action(
 
     elif isinstance(action, RemoveFillers):
         cuts = _filler_cuts(transcript, action.words)
+        keep = rm.subtract(keep, cuts)
+
+    elif isinstance(action, Tighten):
+        cuts = _tighten_cuts(transcript, action.max_gap_s, action.pad_s)
+        keep = rm.subtract(keep, cuts)
+
+    elif isinstance(action, RemoveRetakes):
+        cuts = _retake_cuts(transcript, action.similarity)
         keep = rm.subtract(keep, cuts)
 
     elif isinstance(action, Trim):
@@ -312,6 +403,10 @@ def label_for_action(action: Action) -> str:
         return "Removed silences"
     if isinstance(action, RemoveFillers):
         return "Removed filler words"
+    if isinstance(action, Tighten):
+        return "Tightened pauses"
+    if isinstance(action, RemoveRetakes):
+        return "Removed retakes"
     if isinstance(action, Trim):
         return f"Trimmed {action.mode} anchor"
     if isinstance(action, FilterTopic):

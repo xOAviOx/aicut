@@ -64,12 +64,17 @@ class Settings:
     def cache_dir(self) -> Path:
         return self.home / "cache"
 
+    @property
+    def workspaces_dir(self) -> Path:
+        return self.home / "workspaces"
+
     def project_dir(self, project_id: str) -> Path:
         return self.projects_dir / project_id
 
     def ensure_dirs(self) -> None:
         self.projects_dir.mkdir(parents=True, exist_ok=True)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.workspaces_dir.mkdir(parents=True, exist_ok=True)
 
 
 @lru_cache(maxsize=1)

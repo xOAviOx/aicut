@@ -46,6 +46,87 @@ decision is ambiguous, pick the boring, proven option and record it here.
 - **Range math uses an epsilon (1e-6) for merge/adjacency.** Avoids float-noise
   fragmentation; adjacent ranges (`(0,1),(1,2)`) merge.
 
+## Post-v1 features (waveform, tighten, retakes, confidence, presets)
+
+- **`tighten` caps every gap; `remove_silences` only removes wide ones.** They
+  are deliberately distinct actions rather than one parameterized action, so the
+  LLM and the one-click buttons can pick the right feel: `remove_silences`
+  (min_gap 0.6s) drops obvious dead air, while `tighten` (max_gap 0.35s) also
+  trims the breaths *inside* sentences, leaving at most `max_gap_s` of each. Both
+  are pure range math and compose with everything else.
+- **Retake detection is lexical, not embedding-based.** Repeated takes are
+  usually near-verbatim restarts, so `difflib.SequenceMatcher` over normalized
+  tokens (plus a containment boost for abandoned false starts) is precise,
+  fully deterministic, unit-testable, and — crucially — needs **zero ML deps**,
+  keeping it on the "fully usable without the `ml` extra" path. Embedding-based
+  detection of paraphrased restarts is parked in `IDEAS.md`. A retake cuts
+  `[earlier.start, retake.start]` so chains (A≈B≈C) collapse cleanly to C.
+- **Waveform peaks come from a low-rate PCM decode, not numpy.** ffmpeg decodes
+  to 2 kHz mono `s16le`; we reduce to ~900 max-abs buckets with the stdlib
+  `array` module (C-speed slice max/min). Bounded work regardless of clip length,
+  no new dependency. Peaks are cached per project (`waveform.json`) and served
+  lazily on first request; audio-less inputs yield `[]` and the canvas draws
+  nothing. The reduction is a pure function (`reduce_to_peaks`) so it's tested
+  without ffmpeg.
+- **Confidence shading is CSS-gated, always in the DOM.** Each word carries its
+  shading class (`word-lowconf` < 0.5, `word-midconf` < 0.72) unconditionally;
+  the styles only apply under a `.show-confidence` container class. Toggling the
+  reader's view is a single class flip — it never re-renders the 5k-word
+  transcript or touches the imperative highlight/selection paths. `Word.prob` is
+  optional so older cached transcripts and hand-built fixtures still validate.
+- **Export presets live on `ProjectSettings.export_preset`, written on export.**
+  A field-scoped store write (`remember_export_preset`) that undo/redo and
+  revision appends leave untouched. The dialog prefers the saved preset, falling
+  back to the current edit's aspect/captions so a first export still makes sense.
+
+## Multi-clip merge (append / stitch)
+
+- **Merge happens at export, not in the editor.** A full in-editor multi-clip
+  timeline (both transcripts in one surface, drag-reorder) breaks the single-
+  source assumption baked into the project model, engine, preview, and revision
+  system — it was a deliberate v1 non-goal. Instead, each video stays its own
+  single-source project (edited with the full existing toolset) and the Export
+  dialog stitches the chosen projects' *head edits* A→B→… into one file. This
+  reuses the entire engine unchanged and is additive: single-clip export is
+  byte-for-byte the same path as before (the merge branch only triggers when
+  `append_project_ids` is non-empty).
+- **Every clip is normalized to one canvas + fps before `concat`.** ffmpeg's
+  concat filter demands identical size/SAR/fps/audio-format across inputs, so
+  each clip's segments are scaled+padded (or cropped for 9:16/1:1) to the target
+  dimensions, forced to 30 fps and SAR 1, and audio is `aresample`d to 48 kHz
+  `fltp` stereo. Target canvas = the aspect preset's size, or clip 1's dimensions
+  (rounded to even) for "source".
+- **Audio is kept only if *all* clips have it.** Mixed audio/silent inputs would
+  desync the `concat` (which needs every segment to carry both streams); rather
+  than synthesize silence per gap, v1 drops audio entirely in that rare case.
+- **Captions across a merge are one ASS, offset per clip.** `caption_events`
+  gained a `time_offset`; each clip's events are remapped onto its own output
+  timeline then shifted by the cumulative output duration of prior clips, so
+  subtitles stay in sync across the join. The single-clip `build_ass` is now a
+  thin wrapper over `caption_events` + `render_ass` (output unchanged; golden
+  test still passes).
+
+## Multi-clip Workspace (edit several clips together)
+
+- **A Workspace is a thin ordered group of clips, not a new engine.** Each clip
+  stays an ordinary single-source `Project` with its own transcript, revisions,
+  and edits; a `Workspace` just stores `{name, clip_ids[]}` in `~/aicut/
+  workspaces/{id}.json`. This reuses the entire editor, revision/undo model, and
+  per-clip transcription untouched — the single-source assumptions never had to
+  change. It's the pragmatic "clip tabs" design; a fused single-timeline editor
+  (one playhead across clips) remains in `IDEAS.md`.
+- **The workspace UI mounts the existing `Editor` for the selected clip.** A
+  `WorkspaceBar` renders above it with clip tabs; picking a tab is just
+  `openProject(clipId)` under the hood. `applyPayload` keeps the clip rail's copy
+  of each project fresh so the combined-duration readout stays live as you edit.
+- **Merged export reuses the append path, driven off clip 0.** "Export merged"
+  calls the normal `POST /projects/{clip0}/export` with `append_project_ids =`
+  the remaining clips, so there's one export code path. Progress is read via a
+  dedicated SSE subscription on clip 0 (independent of which clip is on screen),
+  and the finished file lands in clip 0's exports.
+- **Workspace deletion only ungroups.** Removing a workspace (or a clip from it)
+  never deletes the underlying clip projects — they remain usable on their own.
+
 ## LLM
 
 - **Ollama only, no cloud, no API keys** (spec §5). One `plan()` interface so
