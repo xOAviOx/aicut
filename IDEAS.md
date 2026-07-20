@@ -10,7 +10,9 @@ Parked here per the spec's non-goals so they don't creep into v1.
 - B-roll, music beds, image overlays.
 - Transitions (crossfades, wipes) between kept ranges.
 - Speaker diarization ("keep only what Alice said").
-- Auto-shorts / virality clipping; hook detection.
+- Virality scoring / hook detection (ML). Note: a deterministic **auto-short
+  (Highlights)** pass is now shipped — it keeps the strongest segments up to a
+  time budget. The still-deferred piece is *learned* virality/hook ranking.
 - Face-tracking / content-aware reframe for 9:16 (v1 does center crop).
 - Translation / dubbing of the transcript.
 - Collaboration, auth, cloud sync.
@@ -28,8 +30,20 @@ Parked here per the spec's non-goals so they don't creep into v1.
   dead air), punchier than `remove_silences`.
 - **Export presets remembered per project** — the Export dialog reopens with the
   last-used aspect/captions/quality.
+- **Retake detection via embeddings** — `remove_retakes` now takes an optional
+  semantic scorer (sentence-transformers), so paraphrased restarts are caught,
+  not just near-verbatim ones; lexical stays the zero-dep fallback.
+- **Undo grouping** — a burst of manual edits within a few seconds folds into a
+  single history entry (one undo reverts the whole burst).
+- **Highlights (auto-short)** — `find_highlights` scores every segment on
+  content density, sentence completeness, and filler load, then keeps the
+  strongest ones (chronologically) up to a budget of
+  `min(target_s, current_content × max_fraction)`. Deterministic, no ML deps;
+  available as a one-click button and via the AI command bar.
 
-## Still smaller nice-to-haves
+## Multi-clip merge + workspaces (shipped)
 
-- Retake detection via embeddings (paraphrased restarts, not just near-verbatim).
-- Undo grouping (collapse a burst of manual deletes into one history entry).
+- **Merge at export** — stitch several clips A→B→… into one file, normalized to a
+  common canvas/fps, captions offset per clip.
+- **Workspaces** — group clips and edit each with the full toolset via clip tabs,
+  then export merged.

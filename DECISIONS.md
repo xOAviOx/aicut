@@ -127,6 +127,22 @@ decision is ambiguous, pick the boring, proven option and record it here.
 - **Workspace deletion only ungroups.** Removing a workspace (or a clip from it)
   never deletes the underlying clip projects — they remain usable on their own.
 
+## Undo grouping & semantic retakes
+
+- **Undo grouping folds edits into the head revision, it doesn't diff.** Manual
+  edits carry `group_key="manual"`; when the head shares that key and is recent
+  (≤6 s) and last, the new plan is compiled *on top of head* (which already holds
+  the group's prior edits), so the folded revision is the correct cumulative
+  state and one undo reverts the whole burst. One-click and AI edits pass no key,
+  so they always stay distinct log entries. The delta in the label is measured
+  from the revision the group started on.
+- **Semantic retake scoring is injected, like the topic resolver.** `_retake_cuts`
+  takes an optional `(text_a, text_b) -> float` scorer; the pair score becomes
+  `max(lexical, semantic)` so paraphrased restarts get caught while the pure
+  lexical path stays the zero-dependency default and the engine stays testable
+  with a fake scorer. The real scorer (sentence-transformers) is only built when
+  the `ml` extra is installed.
+
 ## LLM
 
 - **Ollama only, no cloud, no API keys** (spec §5). One `plan()` interface so

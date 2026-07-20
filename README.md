@@ -55,9 +55,10 @@ ollama pull qwen2.5:7b-instruct     # default planner
 ```
 
 **The app is fully usable without Ollama** — manual transcript editing and the
-one-click *Remove silences / Remove fillers / Tighten / Remove retakes / Captions
-/ 9:16* actions are deterministic and never touch the LLM. (Retake detection is
-lexical, so it needs no ML deps either.)
+one-click *Remove silences / Remove fillers / Tighten / Remove retakes /
+Highlights / Captions / 9:16* actions are deterministic and never touch the LLM.
+(Retake detection and the Highlights auto-short are heuristic, so they need no ML
+deps either.)
 
 ## How it works
 
