@@ -25,6 +25,7 @@ from .models import (
     CutRanges,
     CutWords,
     EditPlan,
+    FilterSpeaker,
     FilterTopic,
     FindHighlights,
     KeepRanges,
@@ -364,6 +365,21 @@ def apply_action(
         else:
             keep = rm.subtract(keep, spans)
 
+    elif isinstance(action, FilterSpeaker):
+        spans = rm.clamp(
+            [(s.start, s.end) for s in transcript.segments if s.speaker == action.speaker],
+            0.0,
+            dur,
+        )
+        if not spans:
+            raise CompileError(
+                f"no segments labeled {action.speaker!r} — run diarization first"
+            )
+        if action.mode == "keep":
+            keep = rm.intersect(keep, spans)
+        else:
+            keep = rm.subtract(keep, spans)
+
     elif isinstance(action, SetCaptions):
         captions = captions.model_copy(deep=True)
         captions.enabled = action.enabled
@@ -487,6 +503,8 @@ def label_for_action(action: Action) -> str:
         return f"Trimmed {action.mode} anchor"
     if isinstance(action, FilterTopic):
         return f"{'Kept' if action.mode == 'keep' else 'Removed'} topic: {action.query!r}"
+    if isinstance(action, FilterSpeaker):
+        return f"{'Kept only' if action.mode == 'keep' else 'Removed'} {action.speaker}"
     if isinstance(action, SetCaptions):
         return f"Captions {'on' if action.enabled else 'off'}"
     if isinstance(action, SetAspect):

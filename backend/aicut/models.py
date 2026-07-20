@@ -32,6 +32,9 @@ class Segment(BaseModel):
     end: float
     text: str
     words: list[Word] = Field(default_factory=list)
+    # Diarized speaker label (e.g. "Speaker 1"), when diarization has run.
+    # Optional so pre-diarization transcripts and fixtures still validate.
+    speaker: str | None = None
 
 
 class Transcript(BaseModel):
@@ -174,6 +177,15 @@ class FilterTopic(BaseModel):
     segment_ids: list[int] | None = None
 
 
+class FilterSpeaker(BaseModel):
+    """Keep or remove everything a given diarized speaker said. Deterministic —
+    it just reads the ``speaker`` labels already on the transcript segments."""
+
+    type: Literal["filter_speaker"] = "filter_speaker"
+    mode: Literal["keep", "remove"]
+    speaker: str
+
+
 class CutRanges(BaseModel):
     type: Literal["cut_ranges"] = "cut_ranges"
     ranges: list[tuple[float, float]]
@@ -223,6 +235,7 @@ Action = Annotated[
     | FindHighlights
     | Trim
     | FilterTopic
+    | FilterSpeaker
     | CutRanges
     | KeepRanges
     | CutWords

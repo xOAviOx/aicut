@@ -44,6 +44,13 @@ class Settings:
         )
     )
 
+    # Diarization (optional pyannote path; the local numpy fallback needs no model)
+    diarization_model: str = field(
+        default_factory=lambda: os.environ.get(
+            "AICUT_DIARIZE_MODEL", "pyannote/speaker-diarization-3.1"
+        )
+    )
+
     # LLM (Ollama)
     ollama_host: str = field(
         default_factory=lambda: os.environ.get("OLLAMA_HOST", "http://localhost:11434")

@@ -80,6 +80,15 @@ export const api = {
     return jsonOrThrow<ProjectPayload>(r);
   },
 
+  async diarize(id: string, numSpeakers?: number): Promise<ProjectPayload> {
+    const r = await fetch(`/api/projects/${id}/diarize`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ num_speakers: numSpeakers ?? null }),
+    });
+    return jsonOrThrow<ProjectPayload>(r);
+  },
+
   async undo(id: string): Promise<ProjectPayload> {
     const r = await fetch(`/api/projects/${id}/undo`, { method: "POST" });
     return jsonOrThrow<ProjectPayload>(r);

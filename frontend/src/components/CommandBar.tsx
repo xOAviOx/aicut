@@ -84,6 +84,70 @@ function OneClickButtons() {
   );
 }
 
+function SpeakerBar() {
+  const hasTranscript = useStore((s) => !!s.transcript);
+  const speakers = useStore((s) => s.speakers());
+  const diarize = useStore((s) => s.diarize);
+  const diarizing = useStore((s) => s.diarizing);
+  const applyAction = useStore((s) => s.applyAction);
+  const busy = useStore((s) => s.busy);
+  const [count, setCount] = useState<number | undefined>(undefined); // undefined = Auto
+  if (!hasTranscript) return null;
+
+  return (
+    <div className="mb-2 flex flex-wrap items-center gap-1.5">
+      <button
+        onClick={() => diarize(count)}
+        disabled={diarizing || busy}
+        title="Detect who is speaking (local numpy diarizer; pyannote if installed)"
+        className="rounded-full border border-ink-600 px-3 py-1 text-xs text-parchment-300 transition hover:border-accent/60 hover:text-parchment-100 disabled:opacity-50"
+      >
+        {diarizing
+          ? "Detecting speakers…"
+          : speakers.length
+            ? "Re-detect speakers"
+            : "Detect speakers"}
+      </button>
+      <select
+        value={count ?? "auto"}
+        onChange={(e) => setCount(e.target.value === "auto" ? undefined : Number(e.target.value))}
+        disabled={diarizing || busy}
+        title="Expected number of speakers"
+        className="rounded-full border border-ink-600 bg-ink-900 px-2 py-1 text-xs text-parchment-300 outline-none disabled:opacity-50"
+      >
+        <option value="auto">Auto</option>
+        <option value="2">2 speakers</option>
+        <option value="3">3 speakers</option>
+        <option value="4">4 speakers</option>
+      </select>
+      {speakers.map((spk) => (
+        <span
+          key={spk}
+          className="inline-flex items-center gap-1 rounded-full border border-accent/40 bg-accent/10 py-1 pl-2.5 pr-1 text-xs text-parchment-100"
+        >
+          {spk}
+          <button
+            onClick={() => applyAction({ type: "filter_speaker", mode: "keep", speaker: spk })}
+            disabled={busy}
+            title={`Keep only ${spk}`}
+            className="rounded-full px-1.5 text-parchment-300 transition hover:bg-accent/25 hover:text-parchment-100 disabled:opacity-50"
+          >
+            keep
+          </button>
+          <button
+            onClick={() => applyAction({ type: "filter_speaker", mode: "remove", speaker: spk })}
+            disabled={busy}
+            title={`Remove ${spk}`}
+            className="rounded-full px-1.5 text-parchment-300 transition hover:bg-redact/25 hover:text-parchment-100 disabled:opacity-50"
+          >
+            ✕
+          </button>
+        </span>
+      ))}
+    </div>
+  );
+}
+
 export default function CommandBar() {
   const command = useStore((s) => s.command);
   const pending = useStore((s) => s.commandPending);
@@ -100,6 +164,7 @@ export default function CommandBar() {
 
   return (
     <div className="border-t border-ink-700/60 bg-ink-850/70 p-3">
+      <SpeakerBar />
       <OneClickButtons />
 
       {last && !error && (

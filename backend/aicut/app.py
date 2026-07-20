@@ -19,6 +19,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from . import __version__
+from .diarize import assign_speakers, get_diarizer, speakers_in
 from .edl import CompileError, label_for_action
 from .embeddings import get_retake_scorer, get_topic_resolver
 from .events import EventHub, event_stream
@@ -130,6 +131,10 @@ class CreateProjectBody(BaseModel):
 class EditRequest(BaseModel):
     action: Action
     notes: str | None = None
+
+
+class DiarizeBody(BaseModel):
+    num_speakers: int | None = None  # None = let the diarizer decide (defaults to 2)
 
 
 class CommandBody(BaseModel):
@@ -333,6 +338,35 @@ def _register_routes(app: FastAPI) -> None:
             },
         )
         return _project_payload(store, pid)
+
+    # -- speaker diarization --------------------------------------------
+    @app.post("/api/projects/{pid}/diarize")
+    async def diarize_project(pid: str, body: DiarizeBody) -> dict:
+        project = store.get(pid)
+        if project is None:
+            raise HTTPException(404, "project not found")
+        if project.transcript_status != "ready":
+            raise HTTPException(409, "transcript not ready")
+        transcript = store.get_transcript(pid)
+        if transcript is None:
+            raise HTTPException(409, "transcript not ready")
+        diarizer = get_diarizer()
+        if diarizer is None:
+            raise HTTPException(
+                501,
+                "diarization unavailable — install numpy for the local diarizer, "
+                "or the 'diarize' extra (pyannote) for the accurate one",
+            )
+        turns = await asyncio.to_thread(diarizer, project.source_path, body.num_speakers)
+        if not turns:
+            raise HTTPException(422, "diarization produced no speakers for this audio")
+        labeled = assign_speakers(transcript, turns)
+        store.save_transcript(pid, labeled)
+        return {
+            "project": store.get(pid).model_dump(),
+            "transcript": labeled.model_dump(),
+            "speakers": speakers_in(labeled),
+        }
 
     # -- manual edits (M3) ----------------------------------------------
     @app.post("/api/projects/{pid}/edits")
