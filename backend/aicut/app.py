@@ -20,18 +20,20 @@ from pydantic import BaseModel
 
 from . import __version__
 from .edl import CompileError, label_for_action
-from .embeddings import get_topic_resolver
+from .embeddings import get_retake_scorer, get_topic_resolver
 from .events import EventHub, event_stream
 from .llm import LLMUnavailable, PlanError, Planner, state_summary
 from .models import (
     Action,
     EditPlan,
     ExportPresetSettings,
+    FindHighlights,
     RemoveFillers,
     RemoveRetakes,
     RemoveSilences,
     SetAspect,
     SetCaptions,
+    SetTransition,
     Tighten,
     Transcript,
 )
@@ -89,6 +91,9 @@ ONE_CLICK: dict[str, EditPlan] = {
     "remove_retakes": EditPlan(
         actions=[RemoveRetakes()], notes="Removed repeated takes, kept the last."
     ),
+    "highlights": EditPlan(
+        actions=[FindHighlights()], notes="Kept the highlights — a tight auto-short."
+    ),
     "captions_on": EditPlan(
         actions=[SetCaptions(enabled=True, granularity="segment")], notes="Captions on."
     ),
@@ -96,6 +101,13 @@ ONE_CLICK: dict[str, EditPlan] = {
     "aspect_916": EditPlan(actions=[SetAspect(aspect="9:16")], notes="Reframed to 9:16."),
     "aspect_11": EditPlan(actions=[SetAspect(aspect="1:1")], notes="Reframed to 1:1."),
     "aspect_source": EditPlan(actions=[SetAspect(aspect="source")], notes="Aspect back to source."),
+    "crossfade_on": EditPlan(
+        actions=[SetTransition(kind="crossfade")], notes="Crossfade between cuts."
+    ),
+    "wipe_on": EditPlan(actions=[SetTransition(kind="wipe")], notes="Wipe between cuts."),
+    "transition_off": EditPlan(
+        actions=[SetTransition(kind="none")], notes="Hard cuts (no transition)."
+    ),
 }
 
 
@@ -332,7 +344,8 @@ def _register_routes(app: FastAPI) -> None:
             raise HTTPException(409, "transcript not ready")
         plan = EditPlan(actions=[body.action], notes=body.notes or "")
         try:
-            store.append_revision(pid, plan, label_for_action(body.action))
+            # Manual edits within a short window collapse into one history entry.
+            store.append_revision(pid, plan, label_for_action(body.action), group_key="manual")
         except CompileError as e:
             raise HTTPException(400, str(e)) from e
         return _project_payload(store, pid)
@@ -371,7 +384,9 @@ def _register_routes(app: FastAPI) -> None:
             raise HTTPException(400, f"unknown action '{kind}'")
         label = plan.actions[0].__class__.__name__
         try:
-            store.append_revision(pid, plan, label_for_action(plan.actions[0]))
+            store.append_revision(
+                pid, plan, label_for_action(plan.actions[0]), retake_scorer=get_retake_scorer()
+            )
         except CompileError as e:
             raise HTTPException(400, str(e)) from e
         _ = label
@@ -403,7 +418,11 @@ def _register_routes(app: FastAPI) -> None:
 
         try:
             _, rev = store.append_revision(
-                pid, plan, _ai_label(plan), topic_resolver=get_topic_resolver()
+                pid,
+                plan,
+                _ai_label(plan),
+                topic_resolver=get_topic_resolver(),
+                retake_scorer=get_retake_scorer(),
             )
         except CompileError as e:
             hub.publish(pid, {"type": "plan", "status": "error"})
