@@ -18,6 +18,7 @@ from difflib import SequenceMatcher
 
 from . import rangemath as rm
 from .models import (
+    DEFAULT_FILLERS,
     Action,
     CaptionSettings,
     CompiledEDL,
@@ -25,6 +26,7 @@ from .models import (
     CutWords,
     EditPlan,
     FilterTopic,
+    FindHighlights,
     KeepRanges,
     RemoveFillers,
     RemoveRetakes,
@@ -33,8 +35,10 @@ from .models import (
     Segment,
     SetAspect,
     SetCaptions,
+    SetTransition,
     Tighten,
     Transcript,
+    TransitionSettings,
     Trim,
     WordRef,
 )
@@ -43,6 +47,10 @@ from .models import (
 # Signature: (query, transcript, mode) -> list[segment_id]. Injected so the
 # engine stays pure and testable; the real one lives in embeddings.py.
 TopicResolver = Callable[[str, Transcript, str], list[int]]
+
+# Optional semantic similarity of two texts in [0, 1], used to catch *paraphrased*
+# retakes that lexical matching misses. Injected; None = lexical-only.
+RetakeScorer = Callable[[str, str], float]
 
 
 class CompileError(ValueError):
@@ -188,12 +196,16 @@ def retake_similarity(a: list[str], b: list[str]) -> float:
     return ratio
 
 
-def _retake_cuts(t: Transcript, similarity: float) -> rm.Ranges:
+def _retake_cuts(
+    t: Transcript, similarity: float, scorer: RetakeScorer | None = None
+) -> rm.Ranges:
     """Cut earlier attempts of repeated lines, keeping the last take.
 
     Compares each segment with the next; when they're near-duplicates the
     earlier one is cut up to the start of its retake. Chains (A≈B≈C) collapse
-    naturally to just C because each adjacent pair contributes a cut.
+    naturally to just C because each adjacent pair contributes a cut. When a
+    semantic ``scorer`` is supplied, the pair score is ``max(lexical, semantic)``
+    so *paraphrased* restarts are caught too, not just near-verbatim ones.
     """
     segs = t.segments
     cuts: rm.Ranges = []
@@ -202,9 +214,53 @@ def _retake_cuts(t: Transcript, similarity: float) -> rm.Ranges:
         b = _seg_tokens(segs[i + 1])
         if len(a) < 2 or len(b) < 2:
             continue
-        if retake_similarity(a, b) >= similarity:
+        score = retake_similarity(a, b)
+        if scorer is not None and score < similarity:
+            score = max(score, scorer(segs[i].text, segs[i + 1].text))
+        if score >= similarity:
             cuts.append((segs[i].start, segs[i + 1].start))
     return rm.clamp(cuts, 0.0, t.duration)
+
+
+_FILLER_SINGLES = frozenset(_norm_token(w) for w in DEFAULT_FILLERS if " " not in w)
+
+
+def _highlight_score(seg: Segment) -> float:
+    """A deterministic 'keep-worthiness' score for one segment.
+
+    Rewards content (more words), complete thoughts (ends on . ! ?), and
+    penalizes filler-heavy or fragmentary lines. No ML — pure text heuristics.
+    """
+    toks = _seg_tokens(seg)
+    n = len(toks)
+    if n == 0:
+        return 0.0
+    filler_n = sum(1 for tk in toks if tk in _FILLER_SINGLES)
+    score = float(n) * (1.0 - 0.5 * (filler_n / n))
+    if seg.text.strip().endswith((".", "!", "?")):
+        score *= 1.15
+    if n < 3:  # very short fragments rarely stand alone
+        score *= 0.3
+    return score
+
+
+def _highlight_spans(t: Transcript, budget_s: float) -> rm.Ranges:
+    """Pick the highest-scoring segments (chronologically ordered) until their
+    cumulative duration reaches ``budget_s``. Always returns at least one span
+    when the transcript has segments, so it never wipes the clip."""
+    segs = [s for s in t.segments if s.end > s.start]
+    if not segs or budget_s <= 0:
+        return []
+    ranked = sorted(segs, key=lambda s: (_highlight_score(s), -s.start), reverse=True)
+    chosen: list[Segment] = []
+    total = 0.0
+    for s in ranked:
+        chosen.append(s)
+        total += s.end - s.start
+        if total >= budget_s:
+            break
+    chosen.sort(key=lambda s: s.start)
+    return rm.clamp([(s.start, s.end) for s in chosen], 0.0, t.duration)
 
 
 def _resolve_word_refs(t: Transcript, refs: list[WordRef]) -> rm.Ranges:
@@ -250,8 +306,11 @@ def apply_action(
     aspect: str,
     transcript: Transcript,
     topic_resolver: TopicResolver | None = None,
-) -> tuple[rm.Ranges, CaptionSettings, str]:
+    retake_scorer: RetakeScorer | None = None,
+    transition: TransitionSettings | None = None,
+) -> tuple[rm.Ranges, CaptionSettings, str, TransitionSettings]:
     dur = transcript.duration
+    transition = transition.model_copy(deep=True) if transition else TransitionSettings()
 
     if isinstance(action, RemoveSilences):
         cuts = _silence_cuts(transcript, action.min_gap_s, action.pad_s)
@@ -266,8 +325,15 @@ def apply_action(
         keep = rm.subtract(keep, cuts)
 
     elif isinstance(action, RemoveRetakes):
-        cuts = _retake_cuts(transcript, action.similarity)
+        cuts = _retake_cuts(transcript, action.similarity, retake_scorer)
         keep = rm.subtract(keep, cuts)
+
+    elif isinstance(action, FindHighlights):
+        # Budget scales with what's currently kept so the reel always tightens.
+        budget = min(action.target_s, rm.total(keep) * action.max_fraction)
+        spans = _highlight_spans(transcript, budget)
+        if spans:  # empty only when there are no segments → leave keep untouched
+            keep = rm.intersect(keep, spans)
 
     elif isinstance(action, Trim):
         keep = rm.subtract(keep, _trim_cut(transcript, action))
@@ -310,6 +376,11 @@ def apply_action(
     elif isinstance(action, SetAspect):
         aspect = action.aspect
 
+    elif isinstance(action, SetTransition):
+        transition.kind = action.kind
+        if action.duration_s is not None:
+            transition.duration_s = action.duration_s
+
     else:  # pragma: no cover - discriminated union is exhaustive
         raise CompileError(f"unhandled action type: {getattr(action, 'type', action)}")
 
@@ -317,7 +388,7 @@ def apply_action(
     # an empty keep set for cut operations that removed everything — the caller
     # decides how to warn; here we just keep it well-formed.
     keep = rm.drop_short(keep, rm.MIN_KEEP)
-    return keep, captions, aspect
+    return keep, captions, aspect, transition
 
 
 def _resolve_topic(
@@ -348,19 +419,22 @@ def compile_plan(
     base: CompiledEDL,
     transcript: Transcript,
     topic_resolver: TopicResolver | None = None,
+    retake_scorer: RetakeScorer | None = None,
 ) -> CompiledEDL:
     """Apply every action in ``plan`` on top of ``base`` → a new EDL."""
     keep = rm.normalize(base.keep)
     captions = base.captions.model_copy(deep=True)
     aspect = base.aspect
+    transition = base.transition.model_copy(deep=True)
     for action in plan.actions:
-        keep, captions, aspect = apply_action(
-            action, keep, captions, aspect, transcript, topic_resolver
+        keep, captions, aspect, transition = apply_action(
+            action, keep, captions, aspect, transcript, topic_resolver, retake_scorer, transition
         )
     return CompiledEDL(
         keep=keep,
         captions=captions,
         aspect=aspect,
+        transition=transition,
         duration=transcript.duration,
     )
 
@@ -407,6 +481,8 @@ def label_for_action(action: Action) -> str:
         return "Tightened pauses"
     if isinstance(action, RemoveRetakes):
         return "Removed retakes"
+    if isinstance(action, FindHighlights):
+        return "Kept highlights"
     if isinstance(action, Trim):
         return f"Trimmed {action.mode} anchor"
     if isinstance(action, FilterTopic):
@@ -415,4 +491,6 @@ def label_for_action(action: Action) -> str:
         return f"Captions {'on' if action.enabled else 'off'}"
     if isinstance(action, SetAspect):
         return f"Aspect → {action.aspect}"
+    if isinstance(action, SetTransition):
+        return "Hard cuts" if action.kind == "none" else f"Transition → {action.kind}"
     return "Edit"
