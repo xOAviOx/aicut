@@ -45,6 +45,7 @@ Available actions (discriminated by "type"):
 - {"type":"remove_fillers","words":["um","uh",...]}         # omit words for defaults
 - {"type":"tighten","max_gap_s":0.35}                       # cap ALL pauses, incl. within sentences (punchier than remove_silences)
 - {"type":"remove_retakes","similarity":0.8}                # drop repeated attempts at a line, keep the last clean take
+- {"type":"find_highlights","target_s":60,"max_fraction":0.6}  # auto-short: keep only the best moments up to a time budget
 - {"type":"trim","mode":"before|after","anchor":{"kind":"segment_id","value":<id>}}
 - {"type":"filter_topic","mode":"keep|remove","query":"<topic>","segment_ids":[<id>,...]}
     # ALWAYS include segment_ids you judge relevant to the query from the transcript.
@@ -52,11 +53,14 @@ Available actions (discriminated by "type"):
 - {"type":"keep_ranges","ranges":[[start_s,end_s]]}
 - {"type":"set_captions","enabled":true,"granularity":"segment|word"}
 - {"type":"set_aspect","aspect":"source|9:16|1:1"}
+- {"type":"set_transition","kind":"none|crossfade|wipe","duration_s":0.5}  # dissolve/wipe between kept ranges
 
 Rules:
 - Prefer trim/filter_topic/remove_* over raw cut_ranges.
 - For "tighten"/"punchier"/"snappier"/"remove all pauses" use tighten. For "remove mistakes"/"keep the last take"/"cut the retakes" use remove_retakes.
 - For "vertical"/"shorts"/"reels" use set_aspect 9:16. For "subtitle"/"captions" use set_captions.
+- For "highlights"/"best bits"/"make a short/teaser"/"cut it down to the good parts" use find_highlights.
+- For "crossfade"/"dissolve"/"smooth the cuts"/"wipe between clips" use set_transition (kind wipe for "wipe", else crossfade).
 - Keep "notes" to one short human sentence describing what you did.
 """
 

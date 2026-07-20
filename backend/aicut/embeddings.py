@@ -81,3 +81,21 @@ def get_topic_resolver(settings: Settings | None = None) -> TopicResolver | None
         return resolve_topic(query, transcript, mode, settings)
 
     return _resolver
+
+
+def get_retake_scorer(settings: Settings | None = None):
+    """Semantic similarity of two texts (0..1), or None if ML deps are absent.
+
+    Lets ``remove_retakes`` catch paraphrased restarts (e.g. "the price is ten
+    dollars" vs "it costs ten bucks") that the lexical matcher would miss.
+    """
+    if not available():
+        return None
+    settings = settings or get_settings()
+
+    def _scorer(a: str, b: str) -> float:  # pragma: no cover - needs the heavy dep
+        model = _model(settings.embedding_model)
+        emb = model.encode([a, b], normalize_embeddings=True)
+        return float(emb[0] @ emb[1])
+
+    return _scorer

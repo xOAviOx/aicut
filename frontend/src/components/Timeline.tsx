@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useStore } from "../store";
+import { useStore, headEdl } from "../store";
 import { api } from "../api";
 import { clock } from "../lib/clock";
 import { player } from "../lib/player";
@@ -35,6 +35,7 @@ export default function Timeline() {
   const duration = useStore((s) => s.duration());
   const keep = useStore((s) => s.keepRanges());
   const projectId = useStore((s) => s.project?.id);
+  const transitionKind = useStore((s) => headEdl(s.project)?.transition?.kind ?? "none");
   const barRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const playheadRef = useRef<HTMLDivElement>(null);
@@ -125,6 +126,15 @@ export default function Timeline() {
             style={{ left: `${k.left}%`, width: `${k.width}%` }}
           />
         ))}
+        {transitionKind !== "none" &&
+          keptPct.slice(0, -1).map((k, i) => (
+            <div
+              key={`t${i}`}
+              className="pointer-events-none absolute top-1/2 z-[1] h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rotate-45 border border-accent/80 bg-accent/40 shadow-[0_0_5px_rgba(217,164,65,0.55)]"
+              style={{ left: `${k.left + k.width}%` }}
+              title={`${transitionKind} transition between cuts`}
+            />
+          ))}
         <div
           ref={playheadRef}
           className="pointer-events-none absolute top-0 h-full w-[2px] bg-accent shadow-[0_0_6px_rgba(217,164,65,0.6)]"

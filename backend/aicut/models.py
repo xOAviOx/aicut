@@ -63,6 +63,19 @@ class CaptionSettings(BaseModel):
     max_lines: int = 2
 
 
+TransitionKind = Literal["none", "crossfade", "wipe"]
+
+
+class TransitionSettings(BaseModel):
+    """How consecutive kept ranges are joined on export. ``none`` = hard cut
+    (the default, unchanged behavior). ``crossfade`` dissolves A→B; ``wipe``
+    slides B in over A. ``duration_s`` is the overlap; it's clamped at render
+    time so it can never exceed the shortest kept segment."""
+
+    kind: TransitionKind = "none"
+    duration_s: float = 0.5
+
+
 # ---------------------------------------------------------------------------
 # Actions (discriminated union on ``type``)
 # ---------------------------------------------------------------------------
@@ -134,6 +147,20 @@ class RemoveRetakes(BaseModel):
     similarity: float = 0.8
 
 
+class FindHighlights(BaseModel):
+    """Auto-shorts: keep only the strongest segments, up to a time budget.
+
+    Deterministic and dependency-free — each segment is scored on content
+    density, sentence completeness, and filler load; the top-scoring segments
+    are kept (in chronological order) until the budget is reached. The budget is
+    ``min(target_s, current_content * max_fraction)`` so the action always
+    tightens the clip and scales from a 20 s recording to a 20 min one."""
+
+    type: Literal["find_highlights"] = "find_highlights"
+    target_s: float = 60.0
+    max_fraction: float = 0.6
+
+
 class Trim(BaseModel):
     type: Literal["trim"] = "trim"
     mode: Literal["before", "after"]
@@ -182,11 +209,18 @@ class SetAspect(BaseModel):
     aspect: Aspect
 
 
+class SetTransition(BaseModel):
+    type: Literal["set_transition"] = "set_transition"
+    kind: TransitionKind = "crossfade"
+    duration_s: float | None = None  # None → keep the current duration
+
+
 Action = Annotated[
     RemoveSilences
     | RemoveFillers
     | Tighten
     | RemoveRetakes
+    | FindHighlights
     | Trim
     | FilterTopic
     | CutRanges
@@ -194,7 +228,8 @@ Action = Annotated[
     | CutWords
     | RestoreWords
     | SetCaptions
-    | SetAspect,
+    | SetAspect
+    | SetTransition,
     Field(discriminator="type"),
 ]
 
@@ -215,6 +250,7 @@ class CompiledEDL(BaseModel):
     keep: list[tuple[float, float]] = Field(default_factory=list)
     captions: CaptionSettings = Field(default_factory=CaptionSettings)
     aspect: Aspect = "source"
+    transition: TransitionSettings = Field(default_factory=TransitionSettings)
     duration: float = 0.0  # source duration (for remap / display)
 
     @property
@@ -241,6 +277,9 @@ class Revision(BaseModel):
     notes: str = ""
     edl: CompiledEDL
     created_at: float = Field(default_factory=_now)
+    # Consecutive edits sharing a group_key within a short window collapse into
+    # one history entry (e.g. a burst of manual deletes). None = never groups.
+    group_key: str | None = None
 
 
 TranscriptStatus = Literal["pending", "running", "ready", "error"]

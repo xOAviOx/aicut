@@ -9,6 +9,7 @@ recovery is free because the whole thing round-trips through ``project.json``.
 from __future__ import annotations
 
 import threading
+import time
 from pathlib import Path
 
 from .config import Settings, get_settings
@@ -21,6 +22,10 @@ from .models import (
     Transcript,
     Workspace,
 )
+
+# Consecutive manual edits within this many seconds collapse into one history
+# entry (undo grouping) instead of spamming the edit log.
+GROUP_WINDOW_S = 6.0
 
 
 class ProjectStore:
@@ -167,11 +172,15 @@ class ProjectStore:
         plan: EditPlan,
         label_prefix: str,
         topic_resolver=None,
+        retake_scorer=None,
+        group_key: str | None = None,
     ) -> tuple[Project, Revision]:
         """Compile ``plan`` on top of head, append a revision, advance head.
 
         If head is not the last revision (we're mid-undo), the tail is dropped
-        before appending — standard editor redo semantics.
+        before appending — standard editor redo semantics. When ``group_key`` is
+        given and the current head is a recent revision with the same key, the
+        edit is folded into it (undo grouping) instead of creating a new entry.
         """
         with self._lock(pid):
             project = self.get(pid)
@@ -181,8 +190,41 @@ class ProjectStore:
             if transcript is None:
                 raise RuntimeError("transcript not ready")
 
+            head = project.head()
+            is_last = bool(
+                project.revisions and project.head_revision_id == project.revisions[-1].id
+            )
+            can_group = (
+                group_key is not None
+                and head is not None
+                and is_last
+                and head.group_key == group_key
+                and (time.time() - head.created_at) <= GROUP_WINDOW_S
+            )
+
+            if can_group:
+                # Fold into head: head.edl already has the group's prior edits, so
+                # compiling on top of it yields the correct cumulative state. The
+                # delta is measured from the revision the group started on.
+                new_edl = compile_plan(plan, head.edl, transcript, topic_resolver, retake_scorer)
+                idx = project.revision_index(head.id)
+                group_base = (
+                    project.revisions[idx - 1].edl
+                    if idx > 0
+                    else initial_edl(transcript, project.settings)
+                )
+                delta = summarize_delta(group_base, new_edl)
+                head.edl = new_edl
+                head.label = f"Manual: grouped edits ({delta})"
+                head.notes = plan.notes or head.notes
+                head.created_at = time.time()
+                project.settings.captions = new_edl.captions.model_copy(deep=True)
+                project.settings.aspect = new_edl.aspect
+                self.save(project)
+                return project, head
+
             base = self.head_edl(project, transcript)
-            new_edl = compile_plan(plan, base, transcript, topic_resolver)
+            new_edl = compile_plan(plan, base, transcript, topic_resolver, retake_scorer)
             delta = summarize_delta(base, new_edl)
 
             # drop redo tail
@@ -192,7 +234,7 @@ class ProjectStore:
                     project.revisions = project.revisions[: idx + 1]
 
             label = f"{label_prefix} ({delta})" if label_prefix else delta
-            rev = Revision(label=label, notes=plan.notes, edl=new_edl)
+            rev = Revision(label=label, notes=plan.notes, edl=new_edl, group_key=group_key)
             project.revisions.append(rev)
             project.head_revision_id = rev.id
             # mirror latest caption/aspect onto project settings for convenience

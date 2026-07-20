@@ -21,9 +21,9 @@ from functools import lru_cache
 from pathlib import Path
 
 from . import rangemath as rm
-from .ass_builder import build_ass, caption_events, render_ass
+from .ass_builder import caption_events, render_ass
 from .media import ffmpeg_bin, has_audio, video_dimensions
-from .models import CaptionSettings, CompiledEDL, Transcript
+from .models import CaptionSettings, CompiledEDL, Transcript, TransitionSettings
 
 ProgressCb = Callable[[float], None]
 
@@ -70,37 +70,116 @@ def _needs_crop(aspect: str, src_dims: tuple[int, int] | None) -> bool:
     return src_ratio > target_ratio + 1e-3
 
 
+_XFADE_NAME = {"crossfade": "fade", "wipe": "wiperight"}
+
+
+def effective_transition(
+    keep: rm.Ranges, transition: TransitionSettings | None
+) -> tuple[str, float]:
+    """Resolve the transition actually used on this cut.
+
+    Returns ``(kind, duration)``. Degrades to ``("none", 0.0)`` when there's
+    only one segment or the requested overlap wouldn't fit the shortest kept
+    span (a crossfade longer than a clip is undefined in ffmpeg)."""
+    kind = transition.kind if transition else "none"
+    keep = rm.normalize(keep)
+    if kind not in _XFADE_NAME or len(keep) < 2:
+        return "none", 0.0
+    min_seg = min(e - s for s, e in keep)
+    d = min(transition.duration_s, max(0.0, min_seg - 0.05))
+    if d < 0.1:  # too tight to look like anything — just hard-cut
+        return "none", 0.0
+    return kind, d
+
+
+def _retimed_for_transition(
+    events: list[tuple[float, float, str]], keep: rm.Ranges, d: float
+) -> list[tuple[float, float, str]]:
+    """Pull caption times back onto the crossfade-compressed timeline.
+
+    A plain output time in kept-segment index ``k`` sits after ``k`` joins, each
+    overlapping by ``d`` — so subtract ``k*d`` to land on the rendered (shorter)
+    timeline."""
+    keep_n = rm.normalize(keep)
+    bounds: list[float] = []
+    acc = 0.0
+    for s, e in keep_n:
+        acc += e - s
+        bounds.append(acc)
+
+    def shift(t: float) -> float:
+        idx = len(bounds)
+        for i, b in enumerate(bounds):
+            if t <= b + rm.EPS:
+                idx = i
+                break
+        return max(0.0, t - idx * d)
+
+    return [(shift(s), shift(e), txt) for s, e, txt in events]
+
+
 def build_filtergraph(
     keep: rm.Ranges,
     aspect: str,
     ass_name: str | None,
     audio: bool,
     src_dims: tuple[int, int] | None,
+    transition: TransitionSettings | None = None,
 ) -> tuple[str, str, str | None]:
     """Return (graph_text, video_out_label, audio_out_label|None)."""
     keep = rm.normalize(keep)
     parts: list[str] = []
-    concat_inputs: list[str] = []
-    for i, (s, e) in enumerate(keep):
-        parts.append(f"[0:v]trim=start={s:.3f}:end={e:.3f},setpts=PTS-STARTPTS[v{i}]")
-        concat_inputs.append(f"[v{i}]")
-        if audio:
-            d = e - s
-            fo = max(0.0, d - 0.015)
-            parts.append(
-                f"[0:a]atrim=start={s:.3f}:end={e:.3f},asetpts=PTS-STARTPTS,"
-                f"afade=t=in:st=0:d=0.015,afade=t=out:st={fo:.3f}:d=0.015[a{i}]"
-            )
-            concat_inputs.append(f"[a{i}]")
-
     n = len(keep)
-    if audio:
-        parts.append("".join(concat_inputs) + f"concat=n={n}:v=1:a=1[vcat][acat]")
-        acur: str | None = "[acat]"
+    kind, d = effective_transition(keep, transition)
+
+    if kind != "none":
+        # Crossfade/wipe chain: trim each segment (no micro-fades — the xfade
+        # smooths the join), then progressively xfade / acrossfade them. Each
+        # join overlaps by ``d`` so the output timeline shrinks by d per join.
+        for i, (s, e) in enumerate(keep):
+            parts.append(
+                f"[0:v]trim=start={s:.3f}:end={e:.3f},setpts=PTS-STARTPTS,format=yuv420p[v{i}]"
+            )
+            if audio:
+                parts.append(f"[0:a]atrim=start={s:.3f}:end={e:.3f},asetpts=PTS-STARTPTS[a{i}]")
+        xname = _XFADE_NAME[kind]
+        durs = [e - s for s, e in keep]
+        vcur = "[v0]"
+        acur = "[a0]" if audio else None
+        cum = durs[0]  # running output duration of the accumulated video
+        for i in range(1, n):
+            offset = cum - d
+            vout = f"[vx{i}]"
+            parts.append(
+                f"{vcur}[v{i}]xfade=transition={xname}:duration={d:.3f}:offset={offset:.3f}{vout}"
+            )
+            vcur = vout
+            if audio:
+                aout = f"[ax{i}]"
+                parts.append(f"{acur}[a{i}]acrossfade=d={d:.3f}{aout}")
+                acur = aout
+            cum = cum + durs[i] - d
     else:
-        parts.append("".join(concat_inputs) + f"concat=n={n}:v=1:a=0[vcat]")
-        acur = None
-    vcur = "[vcat]"
+        concat_inputs: list[str] = []
+        for i, (s, e) in enumerate(keep):
+            parts.append(f"[0:v]trim=start={s:.3f}:end={e:.3f},setpts=PTS-STARTPTS[v{i}]")
+            concat_inputs.append(f"[v{i}]")
+            if audio:
+                d_seg = e - s
+                fo = max(0.0, d_seg - 0.015)
+                parts.append(
+                    f"[0:a]atrim=start={s:.3f}:end={e:.3f},asetpts=PTS-STARTPTS,"
+                    f"afade=t=in:st=0:d=0.015,afade=t=out:st={fo:.3f}:d=0.015[a{i}]"
+                )
+                concat_inputs.append(f"[a{i}]")
+
+        if audio:
+            parts.append("".join(concat_inputs) + f"concat=n={n}:v=1:a=1[vcat][acat]")
+            acur = "[acat]"
+        else:
+            parts.append("".join(concat_inputs) + f"concat=n={n}:v=1:a=0[vcat]")
+            acur = None
+        vcur = "[vcat]"
 
     if aspect in ("9:16", "1:1"):
         tw, th = TARGET_SIZE[aspect]
@@ -177,6 +256,8 @@ def export(
     audio = has_audio(src)
     src_dims = video_dimensions(src)
 
+    kind, tdur = effective_transition(keep, edl.transition)
+
     ass_name = None
     if captions_on:
         if preset.granularity or edl.captions.enabled != captions_on:
@@ -185,11 +266,16 @@ def export(
             if preset.granularity:
                 edl.captions.granularity = preset.granularity  # type: ignore[assignment]
         play_res = TARGET_SIZE.get(aspect) or (src_dims or (1920, 1080))
-        ass_text = build_ass(edl, transcript, play_res=play_res)
+        events = caption_events(edl, transcript)
+        if tdur > 0:  # crossfades compress the output timeline → pull captions back
+            events = _retimed_for_transition(events, keep, tdur)
+        ass_text = render_ass(events, edl, play_res=play_res)
         ass_name = "captions.ass"
         (workdir / ass_name).write_text(ass_text, encoding="utf-8")
 
-    graph, vlabel, alabel = build_filtergraph(keep, aspect, ass_name, audio, src_dims)
+    graph, vlabel, alabel = build_filtergraph(
+        keep, aspect, ass_name, audio, src_dims, transition=edl.transition
+    )
     (workdir / "filter.txt").write_text(graph, encoding="utf-8")
 
     output_dur = rm.total(keep)

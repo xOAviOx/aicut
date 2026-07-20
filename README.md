@@ -55,9 +55,10 @@ ollama pull qwen2.5:7b-instruct     # default planner
 ```
 
 **The app is fully usable without Ollama** — manual transcript editing and the
-one-click *Remove silences / Remove fillers / Tighten / Remove retakes / Captions
-/ 9:16* actions are deterministic and never touch the LLM. (Retake detection is
-lexical, so it needs no ML deps either.)
+one-click *Remove silences / Remove fillers / Tighten / Remove retakes /
+Highlights / Captions / 9:16* actions are deterministic and never touch the LLM.
+(Retake detection and the Highlights auto-short are heuristic, so they need no ML
+deps either.)
 
 ## How it works
 
@@ -81,6 +82,10 @@ lexical, so it needs no ML deps either.)
   each with the full toolset via clip tabs, and **export them stitched A→B→…** as
   a single file (normalized to one canvas/fps, captions offset per clip). Each
   clip stays an independent project; the workspace just orders them.
+- **Transitions** — optional **crossfade** or **wipe** between kept ranges
+  (`xfade`+`acrossfade` at export; hard cut is the default). The overlap is
+  clamped to the shortest segment and falls back to a hard cut when too tight;
+  captions are re-timed onto the compressed timeline so they stay in sync.
 - **Export** — ffmpeg re-encodes per keep-range (`trim/atrim` + `setpts` +
   `concat`), with ~15 ms audio fades so cuts don't click, ASS captions on the
   **output** timeline, and optional 9:16 crop. `h264_nvenc` when available,

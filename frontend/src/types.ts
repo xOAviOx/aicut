@@ -35,12 +35,20 @@ export interface CaptionSettings {
   max_lines: number;
 }
 
+export type TransitionKind = "none" | "crossfade" | "wipe";
+
+export interface TransitionSettings {
+  kind: TransitionKind;
+  duration_s: number;
+}
+
 export type Span = [number, number];
 
 export interface CompiledEDL {
   keep: Span[];
   captions: CaptionSettings;
   aspect: Aspect;
+  transition: TransitionSettings;
   duration: number;
 }
 
