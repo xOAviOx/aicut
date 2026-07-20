@@ -19,6 +19,7 @@ from aicut.ffmpeg_export import (
     export_merge,
 )
 from aicut.media import probe_duration, video_dimensions
+from aicut.ffmpeg_export import _retimed_for_transition, effective_transition
 from aicut.models import (
     EditPlan,
     RemoveFillers,
@@ -26,6 +27,7 @@ from aicut.models import (
     SetAspect,
     SetCaptions,
     Transcript,
+    TransitionSettings,
 )
 from conftest import segment_from
 from make_fixture import ensure_fixture
@@ -71,6 +73,62 @@ class TestFiltergraph:
         assert "-filter_complex_script" in cmd
         assert "filter.txt" in cmd
         assert "+faststart" in cmd
+
+
+class TestTransitions:
+    def test_effective_transition_clamps_and_falls_back(self):
+        cf = TransitionSettings(kind="crossfade", duration_s=0.5)
+        # one segment: nothing to transition between
+        assert effective_transition([(0, 2)], cf)[0] == "none"
+        # second segment too short for a 0.5s overlap -> hard cut
+        assert effective_transition([(0, 2), (3, 3.1)], cf)[0] == "none"
+        # normal: kind kept, duration clamped under the shortest segment
+        kind, d = effective_transition(
+            [(0, 2), (3, 5)], TransitionSettings(kind="crossfade", duration_s=5.0)
+        )
+        assert kind == "crossfade" and 0.1 <= d <= 2.0
+
+    def test_crossfade_builds_xfade_chain(self):
+        graph, v, a = build_filtergraph(
+            [(0, 2), (3, 5), (6, 8)], "source", None, True,
+            (640, 360), transition=TransitionSettings(kind="crossfade", duration_s=0.5),
+        )
+        assert "xfade=transition=fade:duration=0.500" in graph
+        assert "acrossfade=d=0.500" in graph
+        assert "concat=" not in graph          # crossfade replaces hard concat
+        assert "afade=t=in" not in graph        # no per-segment micro-fades
+        # progressive offsets: 2.0-0.5, then (2+2-0.5)-0.5
+        assert "offset=1.500" in graph and "offset=3.000" in graph
+        assert v == "[vx2]" and a == "[ax2]"
+
+    def test_wipe_uses_wiperight(self):
+        graph, _v, _a = build_filtergraph(
+            [(0, 2), (3, 5)], "source", None, False,
+            (640, 360), transition=TransitionSettings(kind="wipe", duration_s=0.4),
+        )
+        assert "xfade=transition=wiperight:duration=0.400" in graph
+
+    def test_single_segment_falls_back_to_concat(self):
+        graph, _v, _a = build_filtergraph(
+            [(0, 2)], "source", None, True, (640, 360),
+            transition=TransitionSettings(kind="crossfade"),
+        )
+        assert "xfade" not in graph and "concat=n=1:v=1:a=1" in graph
+
+    def test_none_transition_is_unchanged_concat(self):
+        graph, _v, _a = build_filtergraph(
+            [(0, 2), (3, 5)], "source", None, True, (640, 360),
+            transition=TransitionSettings(kind="none"),
+        )
+        assert "xfade" not in graph and "concat=n=2:v=1:a=1" in graph
+
+    def test_caption_retime_pulls_back_by_join(self):
+        keep = [(0.0, 2.0), (3.0, 5.0)]  # plain output segments [0,2] and [2,4]
+        events = [(1.0, 1.8, "a"), (2.2, 3.6, "b")]  # b lands in output seg 1
+        out = _retimed_for_transition(events, keep, 0.5)
+        assert out[0] == (1.0, 1.8, "a")               # seg 0 untouched
+        assert abs(out[1][0] - (2.2 - 0.5)) < 1e-6     # seg 1 pulled back by d
+        assert abs(out[1][1] - (3.6 - 0.5)) < 1e-6
 
 
 class TestMergeFiltergraph:

@@ -66,6 +66,40 @@ def test_edit_after_undo_drops_tail(isolated_home, simple_transcript):
     assert len(project.revisions) == 3  # original, r1, r3
 
 
+def test_manual_edits_group_into_one_entry(isolated_home, simple_transcript):
+    store = ProjectStore()
+    project = _seed(store, simple_transcript)
+    # two grouped manual edits in quick succession fold into one revision
+    project, r1 = store.append_revision(
+        project.id, EditPlan(actions=[CutRanges(ranges=[(0, 1)])]), "cut", group_key="manual"
+    )
+    project, r2 = store.append_revision(
+        project.id, EditPlan(actions=[CutRanges(ranges=[(1, 2)])]), "cut", group_key="manual"
+    )
+    assert r2.id == r1.id  # folded into the same revision
+    assert len(project.revisions) == 2  # Original + one grouped entry
+    assert "grouped" in project.revisions[-1].label
+    # both cuts are reflected in the folded revision
+    from aicut import rangemath as rm
+
+    assert not rm.contains(project.revisions[-1].edl.keep, 0.5)
+    assert not rm.contains(project.revisions[-1].edl.keep, 1.5)
+    # undo removes the whole group at once
+    project = store.undo(project.id)
+    assert project.head_revision_id == project.revisions[0].id
+
+
+def test_non_grouped_edits_stay_separate(isolated_home, simple_transcript):
+    store = ProjectStore()
+    project = _seed(store, simple_transcript)
+    # no group_key (e.g. one-click / AI) → distinct entries
+    store.append_revision(project.id, EditPlan(actions=[CutRanges(ranges=[(0, 1)])]), "a")
+    project, _ = store.append_revision(
+        project.id, EditPlan(actions=[CutRanges(ranges=[(1, 2)])]), "b"
+    )
+    assert len(project.revisions) == 3  # Original + two separate edits
+
+
 def test_undo_at_start_is_noop(isolated_home, simple_transcript):
     store = ProjectStore()
     project = _seed(store, simple_transcript)
