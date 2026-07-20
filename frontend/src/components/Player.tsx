@@ -29,6 +29,7 @@ export default function Player() {
   // Attach the video to the imperative controller.
   useEffect(() => {
     player.attach(videoRef.current);
+    if (videoRef.current) videoRef.current.style.opacity = "1"; // reset any mid-dissolve
     return () => player.attach(null);
   }, [project?.id]);
 
@@ -49,6 +50,19 @@ export default function Player() {
             } else {
               v.currentTime = next;
               t = next;
+              // Transition preview: dissolve the incoming segment in at the join
+              // (the real xfade/wipe is applied at export; this is the felt cue).
+              const e = headEdl(useStore.getState().project);
+              const tr = e?.transition;
+              if (tr && tr.kind !== "none") {
+                const ms = Math.round(Math.min(0.6, tr.duration_s || 0.5) * 1000);
+                v.style.transition = "none";
+                v.style.opacity = "0.08";
+                requestAnimationFrame(() => {
+                  v.style.transition = `opacity ${ms}ms ease`;
+                  v.style.opacity = "1";
+                });
+              }
             }
           }
         }

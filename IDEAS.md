@@ -8,7 +8,6 @@ Parked here per the spec's non-goals so they don't creep into v1.
   each with the full toolset, export stitched A→B→…). The still-deferred piece is
   fusing them into a single editing surface with one playhead.
 - B-roll, music beds, image overlays.
-- Transitions (crossfades, wipes) between kept ranges.
 - Speaker diarization ("keep only what Alice said").
 - Virality scoring / hook detection (ML). Note: a deterministic **auto-short
   (Highlights)** pass is now shipped — it keeps the strongest segments up to a
@@ -40,6 +39,13 @@ Parked here per the spec's non-goals so they don't creep into v1.
   strongest ones (chronologically) up to a budget of
   `min(target_s, current_content × max_fraction)`. Deterministic, no ML deps;
   available as a one-click button and via the AI command bar.
+- **Transitions (crossfade / wipe)** — `set_transition` joins consecutive kept
+  ranges with an ffmpeg `xfade`+`acrossfade` on export (hard cut stays the
+  default). The overlap is clamped so it can never exceed the shortest segment,
+  falls back to a hard cut when too tight, and captions are pulled back onto the
+  crossfade-compressed timeline so they stay in sync. The timeline strip marks
+  each transition join. (A live crossfade *preview* in the player — as opposed
+  to the marker — is still deferred; it renders correctly on export.)
 
 ## Multi-clip merge + workspaces (shipped)
 

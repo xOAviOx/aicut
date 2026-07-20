@@ -8,6 +8,7 @@ function OneClickButtons() {
   const edl = headEdl(project);
   const captionsOn = edl?.captions.enabled ?? false;
   const aspect = edl?.aspect ?? "source";
+  const transitionOn = (edl?.transition?.kind ?? "none") !== "none";
 
   const Btn = ({
     onClick,
@@ -71,6 +72,13 @@ function OneClickButtons() {
         active={aspect === "9:16"}
       >
         9:16
+      </Btn>
+      <Btn
+        onClick={() => oneClick(transitionOn ? "transition_off" : "crossfade_on")}
+        active={transitionOn}
+        title="Crossfade between cuts on export (no AI)"
+      >
+        Crossfade
       </Btn>
     </div>
   );
