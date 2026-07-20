@@ -18,6 +18,7 @@ export interface Segment {
   end: number;
   text: string;
   words: Word[];
+  speaker?: string | null;
 }
 
 export interface Transcript {

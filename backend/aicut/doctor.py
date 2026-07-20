@@ -131,6 +131,30 @@ def check_ollama() -> Check:
         )
 
 
+def check_diarization() -> Check:
+    try:
+        import pyannote.audio  # type: ignore  # noqa: F401
+
+        return Check("Diarization", OK, "pyannote available (accurate speaker labels)")
+    except Exception:
+        pass
+    try:
+        import numpy  # type: ignore  # noqa: F401
+
+        return Check(
+            "Diarization",
+            OK,
+            "local numpy clusterer (pyannote not installed — install `--extra diarize` for best quality)",
+        )
+    except Exception:
+        return Check(
+            "Diarization",
+            WARN,
+            "unavailable — install numpy, or the `diarize` extra",
+            "speaker filtering ('keep only Speaker 1') needs a diarizer",
+        )
+
+
 def check_node() -> Check:
     path = shutil.which("node")
     if not path:
@@ -163,6 +187,7 @@ def run_all() -> list[Check]:
     checks.append(check_nvenc())
     checks.append(check_cuda())
     checks.append(check_ollama())
+    checks.append(check_diarization())
     checks.append(check_node())
     checks.append(check_disk())
     return checks

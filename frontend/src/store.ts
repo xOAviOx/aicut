@@ -34,6 +34,8 @@ interface State {
   liveStatus: string | null;
   liveProgress: number;
 
+  diarizing: boolean;
+
   commandPending: boolean;
   commandError: string | null;
   lastCommand: { summary: string; notes: string } | null;
@@ -79,6 +81,8 @@ interface State {
   cutSelection: () => Promise<void>;
   restoreSelection: () => Promise<void>;
   oneClick: (kind: string) => Promise<void>;
+  diarize: (numSpeakers?: number) => Promise<void>;
+  speakers: () => string[];
   command: (instruction: string) => Promise<void>;
   dismissCommandError: () => void;
   clearError: () => void;
@@ -128,6 +132,8 @@ export const useStore = create<State>((set, get) => ({
 
   liveStatus: null,
   liveProgress: 0,
+
+  diarizing: false,
 
   commandPending: false,
   commandError: null,
@@ -319,6 +325,29 @@ export const useStore = create<State>((set, get) => ({
     } finally {
       set({ busy: false });
     }
+  },
+
+  diarize: async (numSpeakers) => {
+    const { project } = get();
+    if (!project) return;
+    set({ diarizing: true, error: null });
+    try {
+      const payload = await api.diarize(project.id, numSpeakers);
+      get().applyPayload(payload);
+    } catch (e) {
+      set({ error: String(e).replace(/^Error:\s*/, "") });
+    } finally {
+      set({ diarizing: false });
+    }
+  },
+
+  speakers: () => {
+    const segs = get().transcript?.segments ?? [];
+    const seen: string[] = [];
+    for (const seg of segs) {
+      if (seg.speaker && !seen.includes(seg.speaker)) seen.push(seg.speaker);
+    }
+    return seen;
   },
 
   command: async (instruction) => {

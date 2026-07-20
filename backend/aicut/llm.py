@@ -49,6 +49,7 @@ Available actions (discriminated by "type"):
 - {"type":"trim","mode":"before|after","anchor":{"kind":"segment_id","value":<id>}}
 - {"type":"filter_topic","mode":"keep|remove","query":"<topic>","segment_ids":[<id>,...]}
     # ALWAYS include segment_ids you judge relevant to the query from the transcript.
+- {"type":"filter_speaker","mode":"keep|remove","speaker":"Speaker 1"}  # only if segments are diarized
 - {"type":"cut_ranges","ranges":[[start_s,end_s]]}          # explicit times only if user gave them
 - {"type":"keep_ranges","ranges":[[start_s,end_s]]}
 - {"type":"set_captions","enabled":true,"granularity":"segment|word"}

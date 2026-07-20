@@ -86,6 +86,9 @@ deps either.)
   (`xfade`+`acrossfade` at export; hard cut is the default). The overlap is
   clamped to the shortest segment and falls back to a hard cut when too tight;
   captions are re-timed onto the compressed timeline so they stay in sync.
+- **Speaker diarization** — label who's talking, then **keep only Speaker 1** (or
+  remove them) as a deterministic edit. Ships with a dependency-light numpy +
+  ffmpeg clusterer; `uv sync --extra diarize` swaps in pyannote for accuracy.
 - **Export** — ffmpeg re-encodes per keep-range (`trim/atrim` + `setpts` +
   `concat`), with ~15 ms audio fades so cuts don't click, ASS captions on the
   **output** timeline, and optional 9:16 crop. `h264_nvenc` when available,

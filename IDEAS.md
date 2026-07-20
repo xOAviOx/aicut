@@ -8,7 +8,6 @@ Parked here per the spec's non-goals so they don't creep into v1.
   each with the full toolset, export stitched A→B→…). The still-deferred piece is
   fusing them into a single editing surface with one playhead.
 - B-roll, music beds, image overlays.
-- Speaker diarization ("keep only what Alice said").
 - Virality scoring / hook detection (ML). Note: a deterministic **auto-short
   (Highlights)** pass is now shipped — it keeps the strongest segments up to a
   time budget. The still-deferred piece is *learned* virality/hook ranking.
@@ -46,6 +45,13 @@ Parked here per the spec's non-goals so they don't creep into v1.
   crossfade-compressed timeline so they stay in sync. The timeline strip marks
   each transition join. (A live crossfade *preview* in the player — as opposed
   to the marker — is still deferred; it renders correctly on export.)
+- **Speaker diarization ("keep only Speaker 1")** — `diarize` labels each
+  transcript segment with a speaker; `filter_speaker` then keeps/removes one
+  speaker deterministically. Two backends behind a lazy import (like whisper):
+  a dependency-light **numpy + ffmpeg** MFCC/k-means clusterer that works out of
+  the box, and an optional **pyannote** path (`--extra diarize`) for accurate
+  labels. The still-deferred nicety is *naming* speakers ("rename Speaker 1 →
+  Alice") and word-level (mid-segment) speaker boundaries.
 
 ## Multi-clip merge + workspaces (shipped)
 
