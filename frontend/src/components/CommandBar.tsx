@@ -55,6 +55,12 @@ function OneClickButtons() {
         Remove retakes
       </Btn>
       <Btn
+        onClick={() => oneClick("highlights")}
+        title="Auto-short: keep only the strongest moments (no AI)"
+      >
+        Highlights
+      </Btn>
+      <Btn
         onClick={() => oneClick(captionsOn ? "captions_off" : "captions_on")}
         active={captionsOn}
       >
