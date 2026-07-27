@@ -172,9 +172,6 @@ The screenshots above are generated from a self-contained demo project — run
 short clip with filler words, silences, and a repeated take, so every one-click
 action does something visible without needing your own footage).
 
-See [`DECISIONS.md`](DECISIONS.md) for every judgment call, [`QA.md`](QA.md)
-for the manual test script, and [`IDEAS.md`](IDEAS.md) for deferred features.
-
 ## Status
 
 Built milestone by milestone; see git history.
